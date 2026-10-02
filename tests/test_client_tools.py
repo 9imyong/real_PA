@@ -195,6 +195,8 @@ class ClientToolTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_start_rejects_tools_without_route_or_tool_capable_llm(self):
         for start, llm in [({'tools': [WEATHER]}, ToolLLM()), ({'route': True}, ToolLLM()),
+                           ({'route': True, 'tools': [WEATHER], 'route_timeout_ms': 50}, ToolLLM()),
+                           ({'route': True, 'tools': [WEATHER], 'route_timeout_ms': 1.5}, ToolLLM()),
                            ({'route': True, 'tools': [WEATHER]}, FixtureProvider())]:
             with self.subTest(start=start):
                 socket = Socket()

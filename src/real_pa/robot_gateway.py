@@ -171,7 +171,11 @@ class RobotGateway:
             if hello.get('route', False) is not False or 'tools' in hello:
                 if hello.get('route') is not True or 'tools' not in self.providers['llm'].capabilities.features:
                     raise ValueError('client tools require route and an LLM with tools')
-                client_tools = ClientToolBridge(hello['tools'])
+                timeout_ms = hello.get('route_timeout_ms', 1500)
+                if type(timeout_ms) is not int or not 100 <= timeout_ms <= 20000:
+                    raise ValueError('invalid route timeout')
+                # Clients that pre-execute lookups during routing need longer than the default.
+                client_tools = ClientToolBridge(hello['tools'], route_timeout=timeout_ms / 1000)
             if not self.anonymous and not secrets.compare_digest(str(hello.get('token', '')), self.token):
                 raise ValueError('invalid credential')
             if type(hello.get('ui_started', False)) is not bool:

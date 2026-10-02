@@ -141,7 +141,7 @@
 | S→C | tool_call | data.call_id·name·arguments·request_id | LLM 도구 호출의 실행 위임 |
 | C→S | tool_output | call_id, `result`: JSON object | 실행 결과 반환, 응답 계속 |
 
-- route 시한 1.5초 초과·형식 오류·미등록 이름: 도구 없이 응답, 세션 유지
+- route 시한(start `route_timeout_ms` 정수 100~20000, 기본 1500) 초과·형식 오류·미등록 이름: 도구 없이 응답, 세션 유지. 라우팅 중 조회를 사전 실행하는 클라이언트는 조회 시간만큼 늘린다
 - tool_output 시한 15초 초과: `{"error":"tool_timeout"}`을 결과로 전달, 성공 표현 금지
 - tool_output 결과 최대 65536byte, object 외 형식은 실패 결과 처리
 - 끼어들기·새 발화로 generation 변경 시 route·tool 대기 즉시 해제, 늦은 응답 무시

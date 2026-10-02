@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>real-PA · 실시간 대화</title>
+    <link rel="stylesheet" href="/style.css">
+    <script src="/realtime-client.js" defer></script>
+    <script src="/client.js" defer></script>
+  </head>
+  <body>
+    <main>
+      <header><div><p class="eyebrow">REAL-PA</p><h1>실시간 대화</h1><p>글로 말하거나, 마이크를 켜고 편하게 대화하세요.</p></div><span id="status" role="status">연결 전</span></header>
+      <section class="connection" aria-label="대화 연결">
+        <label for="token">접속 키</label><input id="token" type="password" autocomplete="off" placeholder="서버 접속 키">
+        <button id="start">연결</button><button id="stop" disabled>대화 종료</button>
+        <label class="microphone"><input id="microphone" type="checkbox">음성 입력</label>
+      </section>
+      <p id="notice" role="alert"></p>
+      <section id="conversation" aria-label="대화 내용" aria-live="polite"><p class="empty" id="empty">새 대화를 시작하세요.<br>답변 도중에도 글을 보내거나 말할 수 있어요.</p></section>
+      <p class="caption" id="partial" aria-live="polite"></p>
+      <form id="composer">
+        <label class="sr-only" for="text">메시지</label><textarea id="text" rows="2" placeholder="메시지 입력 · Enter로 보내기, Shift+Enter로 줄바꿈" maxlength="4000"></textarea>
+        <div class="actions"><span id="capture-state">마이크 꺼짐</span><button id="interrupt" type="button" disabled>응답 멈추기</button><button id="send" type="submit" disabled>보내기</button></div>
+      </form>
+      <footer>음성 입력을 켜면 답변을 듣는 중에도 마이크 입력이 유지됩니다.</footer>
+    </main>
+  </body>
+</html>

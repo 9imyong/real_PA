@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+.venv/
+.env
+.env.*
+!.env.example
+models/
+artifacts/
+outputs/
+recordings/
+node_modules/
+config/local/
+*.egg-info/
+build/
+dist/
+.pytest_cache/

@@ -1,0 +1,20 @@
+[Unit]
+Description=real-PA duplex API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=realpa
+Group=realpa
+WorkingDirectory=/opt/real-pa
+EnvironmentFile=/etc/real-pa/api.env
+ExecStart=/opt/real-pa/.venv/bin/real-pa api /etc/real-pa/worker.toml --host 127.0.0.1 --port 18484 --origin https://assistant.example.com
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=90
+NoNewPrivileges=true
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

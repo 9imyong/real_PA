@@ -1,0 +1,32 @@
+name: 문서 검사
+
+on:
+  pull_request:
+    paths:
+      - '**/*.md'
+      - 'scripts/check-links.py'
+      - '.markdownlint-cli2.yaml'
+      - '.github/workflows/docs-ci.yml'
+  push:
+    branches: [main]
+    paths:
+      - '**/*.md'
+      - 'scripts/check-links.py'
+      - '.markdownlint-cli2.yaml'
+      - '.github/workflows/docs-ci.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  documentation:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 저장소 가져오기
+        uses: actions/checkout@v4
+      - name: 마크다운 형식 검사
+        uses: DavidAnson/markdownlint-cli2-action@v20
+        with:
+          globs: '**/*.md'
+      - name: 내부 파일 링크 검사
+        run: python3 scripts/check-links.py .

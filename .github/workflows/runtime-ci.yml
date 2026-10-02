@@ -1,0 +1,33 @@
+name: 런타임 계약 검사
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: 고정 의존성 설치
+        run: |
+          python -m pip install uv==0.10.2
+          uv sync --locked --extra dev
+      - name: 제어와 RPC 계약 검사
+        run: .venv/bin/python -m unittest discover -s tests -v
+      - name: Python 구문 검사
+        run: .venv/bin/python -m compileall -q src scripts
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: 브라우저 제어 계약
+        run: node tests/browser/realtime-client.test.cjs
+      - name: 내부 문서 링크 검사
+        run: .venv/bin/python scripts/check-links.py .

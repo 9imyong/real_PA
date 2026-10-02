@@ -17,3 +17,24 @@ class SpeechControlTests(unittest.TestCase):
                      '종료 방법 알려줘.', '대화 끝내는 방법', '', '.', '그만,'):
             with self.subTest(text=text):
                 self.assertIsNone(utterance_control(text))
+
+
+class SpokenTextTests(unittest.TestCase):
+    def test_voice_never_reads_lists_markup_links_or_emoji(self):
+        from real_pa.speech_controls import spoken_text
+        cases = {
+            '1.': '',
+            '- **밤편지** https://youtu.be/x': '밤편지',
+            '[아이유 공식](https://youtube.com) 영상이에요 🐱': '아이유 공식 영상이에요',
+            '👍🏻 👨‍👩‍👧 좋아요 ❤️': '좋아요',
+            '🥰': '',
+        }
+        for text, expected in cases.items():
+            with self.subTest(text=text):
+                self.assertEqual(spoken_text(text), expected)
+
+    def test_meaningful_symbols_and_numbers_are_kept(self):
+        from real_pa.speech_controls import spoken_text
+        for text in ['기온은 13.0°C입니다.', '최고 20℃', '2.5% 올랐어요', '2026.', '1위는 아이유예요.']:
+            with self.subTest(text=text):
+                self.assertEqual(spoken_text(text), text)

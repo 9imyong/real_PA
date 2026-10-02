@@ -5,6 +5,7 @@ import contextlib
 import json
 import uuid
 from .contracts import Context, Event, Request, ProviderError, ResourceExhausted, ContextCapacityExceeded
+from .speech_controls import spoken_text
 
 class DialogueSession:
     def __init__(self, session_id, llm, tts, *, timeout=30.0, max_output=32,
@@ -181,8 +182,11 @@ class DialogueSession:
                     break
                 # A phrase is added to heard history only after its LAST chunk
                 # is acknowledged. Partial audio is conservatively excluded.
+                spoken = spoken_text(phrase)
+                if not spoken:
+                    continue  # Emoji- or markup-only phrase: nothing to say.
                 pending = None
-                async for event in self.tts.stream(Request('tts',{'text':phrase}),context):
+                async for event in self.tts.stream(Request('tts',{'text':spoken}),context):
                     if event.kind != 'audio_chunk':
                         continue
                     if pending is not None:

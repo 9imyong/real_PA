@@ -8,6 +8,10 @@ import re
 from urllib.parse import urlsplit
 from ..contracts import Event, InvalidOutput, ProviderUnavailable, ConfigurationError, ContextCapacityExceeded
 
+# A forced round only has to emit a call (~30 tokens) plus llama.cpp's pre-call text.
+FORCED_MAX_TOKENS = 96
+
+
 class ChatHttp:
     def __init__(self, config):
         self.config = config
@@ -80,9 +84,15 @@ class ChatHttp:
                 body['tool_choice'] = request.data['tool_choice']
         calls = {}
         if body.get('tool_choice') == 'required':
-            async for event in self._forced_call(body, context):
-                yield event
-            return
+            forced = await self._forced_calls(body, context)
+            if forced:
+                for event in forced:
+                    context.check()
+                    yield event
+                yield Event('completed')
+                return
+            # The model refused the forced call: stream a normal answer instead.
+            del body['tool_choice']
         complete = False
         try:
             import httpx
@@ -147,12 +157,16 @@ class ChatHttp:
         except httpx.HTTPError as exc:
             raise ProviderUnavailable('self-hosted inference request failed') from exc
 
-    async def _forced_call(self, body, context):
-        # llama.cpp may write text before a forced call, and its streaming parser
-        # can lose the call after earlier tool turns. A forced round is short and
-        # never spoken, so read it whole and drop the pre-call text.
+    async def _forced_calls(self, body, context):
+        """Return the forced round's tool calls, or [] when the model gave none.
+
+        llama.cpp may write text before a forced call, and its streaming parser
+        can lose the call after earlier tool turns, so the round is read whole.
+        Its text is never shown. The token cap keeps a refusing model from
+        writing a full answer before we can fall back (observed: 7.8s).
+        """
         import httpx
-        body = dict(body, stream=False)
+        body = dict(body, stream=False, max_tokens=min(body['max_tokens'], FORCED_MAX_TOKENS))
         try:
             async with asyncio.timeout(max(0.001,context.deadline - __import__('time').monotonic())):
                 response = await self.client.post(self.url, json=body)
@@ -167,25 +181,22 @@ class ChatHttp:
                     raise ContextCapacityExceeded('inference context capacity exceeded')
             response.raise_for_status()
             try:
-                message = response.json()['choices'][0]['message']
-                calls = message.get('tool_calls') or []
-                events = []
-                for call in calls:
-                    args = json.loads(call['function']['arguments'])
-                    if not isinstance(args, dict) or not call.get('id') or not call['function'].get('name'):
-                        raise ValueError
-                    events.append(Event('tool_call', {'id': call['id'], 'name': call['function']['name'],
-                                                      'arguments': args}))
+                calls = response.json()['choices'][0]['message'].get('tool_calls') or []
             except (ValueError, KeyError, TypeError, IndexError) as exc:
                 raise InvalidOutput('invalid forced tool call') from exc
-            if not events and message.get('content'):
-                events.append(Event('text_delta', {'text': message['content']}))
-            for event in events:
-                context.check()
-                yield event
-            yield Event('completed')
         except httpx.HTTPError as exc:
             raise ProviderUnavailable('self-hosted inference request failed') from exc
+        events = []
+        for call in calls:
+            try:
+                args = json.loads(call['function']['arguments'])
+                if not isinstance(args, dict) or not call.get('id') or not call['function'].get('name'):
+                    raise ValueError
+            except (ValueError, KeyError, TypeError):
+                return []  # Truncated or malformed call: answer normally instead.
+            events.append(Event('tool_call', {'id': call['id'], 'name': call['function']['name'],
+                                              'arguments': args}))
+        return events
 
     async def reset(self, session_id):
         # Chat messages belong to the dialogue controller, not this adapter.

@@ -105,6 +105,34 @@ class ChatHttpCancellationTests(unittest.IsolatedAsyncioTestCase):
         finally:
             await provider.close()
 
+    async def test_forced_round_without_a_call_falls_back_to_a_streamed_answer(self):
+        import json
+        bodies = []
+        def handler(request):
+            body = json.loads(request.content)
+            bodies.append(body)
+            if not body['stream']:
+                return httpx.Response(200, json={'choices': [{'message': {'content': '긴 답변 😊'}}]})
+            return httpx.Response(200, text='data: {"choices":[{"delta":{"content":"스트리밍 답변"}}]}\n\ndata: [DONE]\n\n')
+        config = ProviderConfig('llm', 'chat_http', {'model_id': 'fixture',
+            'features': ['stream', 'cancel', 'tools'], 'languages': ['ko']},
+            {'base_url': 'http://localhost:1/v1', 'max_tokens': 512}, 1, Path('fixture'))
+        provider = ChatHttp(config)
+        provider.client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        tools = [{'type': 'function', 'function': {'name': 'get_news', 'parameters': {}}}]
+        try:
+            events = [e async for e in provider.stream(Request('llm', {
+                'messages': [{'role': 'user', 'content': '뉴스 앵커가 되고 싶어'}], 'tools': tools,
+                'tool_choice': 'required'}), Context('s', 1, 1))]
+            self.assertEqual([(e.kind, e.data) for e in events],
+                             [('text_delta', {'text': '스트리밍 답변'}), ('completed', {})])
+            forced, streamed = bodies
+            self.assertEqual((forced['stream'], forced['max_tokens']), (False, 96))
+            self.assertNotIn('tool_choice', streamed)
+            self.assertEqual((streamed['stream'], streamed['max_tokens']), (True, 512))
+        finally:
+            await provider.close()
+
     async def test_context_error_is_distinct_from_other_bad_requests(self):
         for error_type, expected in [('exceed_context_size_error', ContextCapacityExceeded),
                                      ('invalid_request_error', ProviderUnavailable)]:

@@ -176,6 +176,35 @@ class SessionTests(unittest.IsolatedAsyncioTestCase):
         finally:
             await session.close()
 
+    async def test_tts_receives_cleaned_phrases_while_display_keeps_original(self):
+        class ListModel(FixtureProvider):
+            async def stream(self, request, context):
+                for text in ['영상을 찾았어요.', '\n1.', ' 밤편지 🐱\n']:
+                    yield Event('text_delta', {'text': text})
+                yield Event('completed')
+        spoken = []
+        class RecordingTts(FixtureProvider):
+            async def stream(self, request, context):
+                spoken.append(request.data['text'])
+                async for event in super().stream(request, context):
+                    yield event
+        session = DialogueSession('clean', ListModel(), RecordingTts('tts'))
+        try:
+            await session.submit('영상 보여줘')
+            shown = ''
+            while True:
+                generation, event = await session.next_event()
+                if event.kind == 'text_delta':
+                    shown += event.data['text']
+                if event.kind == 'audio_chunk':
+                    session.acknowledge(generation, event.data['chunk_id'])
+                if event.kind == 'turn_done':
+                    break
+            self.assertEqual(spoken, ['영상을 찾았어요.', '밤편지'])  # '1.' alone is never synthesized
+            self.assertEqual(shown, '영상을 찾았어요.\n1. 밤편지 🐱\n')
+        finally:
+            await session.close()
+
     async def test_interrupted_capacity_retry_cannot_trim_new_turn_or_emit_late_output(self):
         retry_started, release = asyncio.Event(), asyncio.Event()
         class Model(FixtureProvider):

@@ -53,7 +53,6 @@ ui('start').onclick = async () => {
   ui('notice').textContent = '';
   ui('status').textContent = '연결 중';
   ui('start').disabled = true;
-  client.token = ui('token').value;
   client.microphone = ui('microphone').checked;
   await client.start();
   connected(client.isActive);

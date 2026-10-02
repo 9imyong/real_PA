@@ -12,15 +12,19 @@ from .session import DialogueSession
 from .speech_controls import utterance_control
 
 
+MAX_SYSTEM_PROMPT = 8000
+
+
 async def run_connection(ws, providers, session_id, *, ui_started=False, authorize=None,
-                         idle_timeout=None):
+                         idle_timeout=None, system_prompt=None):
     """Run an already authenticated connection with a server-owned session ID.
 
     ``authorize`` must revalidate the original user/binding, never a client field.
     Its failure terminates capture and generation, including an idle connection.
     The websocket facade supplies recv, send, close, and async iteration.
     """
-    session = DialogueSession(session_id, providers['llm'], providers['tts'], timeout=60)
+    session = DialogueSession(session_id, providers['llm'], providers['tts'], timeout=60,
+                              system_prompt=system_prompt)
     runtime = RobotRuntime(session, providers)
     tasks = []
     if idle_timeout is not None and (not math.isfinite(idle_timeout) or idle_timeout <= 0):
@@ -138,22 +142,27 @@ async def run_connection(ws, providers, session_id, *, ui_started=False, authori
 
 class RobotGateway:
     """Loopback development gateway; its token grants no Lemmy tool access."""
-    def __init__(self, providers, token, *, idle_timeout=None):
-        if not token or len(token) < 16:
+    def __init__(self, providers, token, *, idle_timeout=None, anonymous=False):
+        if not anonymous and (not token or len(token) < 16):
             raise ValueError('robot credential must have at least 16 characters')
         self.providers = providers
         self.token = token
         self.idle_timeout = idle_timeout
+        self.anonymous = anonymous
 
     async def handle(self, ws):
         try:
             raw = await asyncio.wait_for(ws.recv(), 10)
-            if not isinstance(raw, str) or len(raw) > 4096:
+            if not isinstance(raw, str) or len(raw) > 6 * MAX_SYSTEM_PROMPT + 4096:
                 raise ValueError('invalid start')
             hello = json.loads(raw)
             if not isinstance(hello, dict) or hello.get('type') != 'start':
                 raise ValueError('invalid start')
-            if not secrets.compare_digest(str(hello.get('token', '')), self.token):
+            system_prompt = hello.get('system_prompt')
+            if system_prompt is not None and (not isinstance(system_prompt, str) or not system_prompt.strip()
+                                              or len(system_prompt) > MAX_SYSTEM_PROMPT):
+                raise ValueError('invalid system prompt')
+            if not self.anonymous and not secrets.compare_digest(str(hello.get('token', '')), self.token):
                 raise ValueError('invalid credential')
             if type(hello.get('ui_started', False)) is not bool:
                 raise ValueError('invalid start mode')
@@ -163,4 +172,5 @@ class RobotGateway:
             await ws.close(1008, 'authentication required')
             return
         await run_connection(ws, self.providers, str(uuid.uuid4()),
-                             ui_started=hello.get('ui_started', False), idle_timeout=self.idle_timeout)
+                             ui_started=hello.get('ui_started', False), idle_timeout=self.idle_timeout,
+                             system_prompt=system_prompt)

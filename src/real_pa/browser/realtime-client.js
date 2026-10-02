@@ -20,7 +20,6 @@ class RealPAClient {
     path = '/v1/realtime',
     capturePath = '/capture.js',
     captureDevice = new BrowserCaptureDevice(),
-    token = '',
     microphone = false,
     outputSampleRate,
     onTranscript = () => {},
@@ -31,7 +30,6 @@ class RealPAClient {
     onNotice = () => {},
   } = {}) {
     this.path = path;
-    this.token = token;
     this.microphone = microphone;
     this.outputSampleRate = outputSampleRate;
     this.onTranscript = onTranscript;
@@ -107,7 +105,7 @@ class RealPAClient {
         reject(new Error('connection closed'));
       };
       this._cancelStart = fail;
-      socket.onopen = () => socket.send(JSON.stringify({ type: 'start', token: this.token, ui_started: true }));
+      socket.onopen = () => socket.send(JSON.stringify({ type: 'start', ui_started: true }));
       socket.onerror = fail;
       socket.onclose = fail;
       socket.onmessage = (event) => {
@@ -274,7 +272,8 @@ class RealPAClient {
     }
     else if (message.type === 'transcript_final') {
       this.onTranscript(message.data.text, true);
-      this.onState(message.data.control === 'interrupt' ? 'listening' : 'thinking');
+      this.onState(message.data.control === 'interrupt' || !message.data.text?.trim()
+        ? 'listening' : 'thinking');
     }
     else if (message.type === 'text_delta') this.onText(message.data.text, false);
     else if (message.type === 'audio_chunk') this._play(message);

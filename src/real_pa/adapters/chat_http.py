@@ -62,7 +62,10 @@ class ChatHttp:
         context.check()
         messages = list(request.data['messages'])
         prompt = self.config.options.get('system_prompt')
-        if prompt:
+        if prompt and messages and messages[0].get('role') == 'system':
+            # Chat templates accept one leading system message; operator text comes first.
+            messages[0] = {'role':'system', 'content':prompt + '\n\n' + messages[0]['content']}
+        elif prompt:
             messages.insert(0, {'role':'system', 'content':prompt})
         body = {'model':self.config.manifest['model_id'],
                 'messages':messages, 'stream':True,

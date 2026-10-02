@@ -244,3 +244,18 @@ GitHub CI는 마크다운 형식과 내부 링크 검사 수행.
 - 응답 header 대기에도 같은 취소 경계 적용, 취소와 함께 도착한 HTTP response는 전달 없이 닫기
 - HTTP 연결 취소는 클라이언트 결과 수신 중단, 서버 GPU 작업의 즉시 취소 보장 아님
 - 현재 검증: 전송 fixture·오류·취소 계약. 실제 GPT-SoVITS 모델·한국어 품질·browser 음성 회귀 미완료
+
+## SenseVoice 무음 입력 억제
+
+- `min_signal_rms`: 100ms 구간의 DC 제거 RMS 중 최대값, 기본 0.001(PCM 정규화 기준 약 -60dBFS)
+- 기준 미만 입력은 decode 생략·빈 전사 반환, 특정 단어 삭제 없음
+- 0으로 비활성화 가능, 설정 범위 0–0.05. 아주 작은 목소리의 누락 가능성 및 장치별 조정 필요
+- 무음/낮은 잡음의 실제 `그.` 생성 재현 후 억제 확인, 일반 잡음·반향의 음성 여부 판정 보장 제외
+
+## 접속키 없는 브라우저 실행
+
+- 로컬 실행기 기본 anonymous mode, 브라우저의 접속키 입력칸 숨김·키 없는 start 허용
+- CLI 직접 실행도 기본 anonymous mode, 접속키 인증은 `real-pa api <worker.toml> --require-token`
+- `/client-config`: `requires_token` boolean만 제공, 키 값 전달 없음
+- anonymous 모드의 WebSocket은 허용 browser Origin 필요, Origin 없는 연결·외부 Origin 거절 및 기존 세션 상한 유지
+- 인증 모드 재선택: 로컬 실행기 `--require-token`, 기존 키 파일 재사용

@@ -157,7 +157,7 @@ flowchart LR
 
 ## 공통 관심사
 
-- 현재 API 인증: 접속 키와 Origin·세션 상한, 회사 접속은 TLS proxy 경계
+- 현재 대화 API: 접속 토큰 없이 Origin·세션 상한 적용, 회사 접속은 TLS proxy 경계
 - 후속 Lemmy 권한: 업무 문맥 검증, 진단 출력의 개인정보 제외
 - 관측: monotonic 시간, 음성 종료 정답 시각과 endpoint 확정 시각 별도 기록
 - 성능: warm/cold·모델별·동시 실행 GPU 메모리·큐 깊이·실제 playback 지연 측정
@@ -319,9 +319,9 @@ LLM tool calling 없는 모델은 일반 대화 전용으로 별도 프로필 �
 | `src/real_pa/adapters/sherpa_vits.py` | 한국어 Mimic3 VITS·22050Hz·40ms PCM·native lifecycle 재사용 | 실제 모델·설치 browser 10턴/합성 음성 2회 통과, 물리 재생/한국어 품질 미검증 |
 | `src/real_pa/adapters/rpc.py` | 회사 inference worker·remote adapter·실제 capability 협상 | WAN 성능·세션 상태 만료 보강 필요 |
 | `src/real_pa/session.py` | 병렬 LLM/TTS·generation 취소·오디오 ack·bounded output | 부분 재생 구절은 보수적으로 기억 제외 |
-| `src/real_pa/robot.py`, `robot_gateway.py` | 지속 VAD·발화 구간 STT·기본 직전 900ms 보존·출력 분리·끼어들기 | standalone은 개발 token, Lemmy route는 쿠키·binding 확인 |
+| `src/real_pa/robot.py`, `robot_gateway.py` | 지속 VAD·발화 구간 STT·기본 직전 900ms 보존·출력 분리·끼어들기 | 대화 API는 token 없이 연결, robot RPC와 Lemmy 쿠키·binding 인증 유지 |
 | `src/real_pa/adapters/lemmy_llm.py` | 기존 LlmPort schema와 자체 서버 변환 | 실제 Lemmy application E2E 미검증 |
-| `src/real_pa/api.py` | HTTP 브라우저·health·인증된 `/v1/realtime`·Origin·동시 상한 | 회사 TLS·WAN·운영 인수 전 |
+| `src/real_pa/api.py` | HTTP 브라우저·health·토큰 없는 `/v1/realtime`·Origin·동시 상한 | 회사 TLS·WAN·운영 인수 전 |
 | `src/real_pa/browser/` | 텍스트·마이크 전환·지속 입력·AEC·generation 재생 중단 | 합성 브라우저 검증·실제 물리 반향 성능 미검증 |
 | `src/real_pa/tool_loop.py` | 선택적 모델 중립 도구 반복·쓰기 취소 분리 | 현재 standalone 프로필에서 미사용 |
 
@@ -346,3 +346,21 @@ LLM tool calling 없는 모델은 일반 대화 전용으로 별도 프로필 �
 - duplex 플래그에서 기존 greet 생성 생략, 신규 경로의 도구·DB 기억·알림·실제 브라우저 검증은 미완료
 - [duplex 전송 계약](../specs/duplex-transport.md)
 - 시각·사주·STT 등 기존 Gemini 기능은 이 변경으로 전환되지 않음
+
+## 브라우저 접속 모드
+
+- CLI API는 항상 토큰 없이 실행, 인증 모드 선택 옵션 없음
+- 로컬 실행기도 항상 토큰 없이 실행
+- `/client-config`는 `requires_token: false` 반환, 브라우저 키 입력 없음
+- anonymous WebSocket에도 Origin·세션/입력 상한 적용, Lemmy 업무 권한 부여 없음
+
+### 대화 API 접속 키 제거 (2026-10-02)
+
+- 사용자 요청에 따라 `/v1/realtime` 접속 token 검증·환경 변수·CLI 인증 옵션·브라우저 입력 제거
+- Origin allowlist·start 형식·세션 상한·유휴 종료 유지, Lemmy 서버의 Origin 없는 연결 허용
+- worker/robot RPC credential 및 Lemmy 사용자·binding 인증 유지
+
+### 연결 단위 지침 (2026-10-02)
+
+- start의 선택적 system_prompt를 DialogueSession이 보관, 매 LLM 요청 앞에 system 메시지로 추가
+- 문맥 용량 초과 시 대화 기록만 축소, 연결 지침 유지. Lemmy가 레미 페르소나를 서버에서 조합해 전달

@@ -13,8 +13,6 @@ from real_pa.api import DuplexAPI
 from test_robot import AudioFixture
 from test_runtime import FixtureProvider
 
-TOKEN = 'unit-api-credential-not-production'
-
 
 class ApiTests(unittest.IsolatedAsyncioTestCase):
     async def test_failed_turn_can_be_followed_by_text_and_audio_on_the_same_connection(self):
@@ -29,7 +27,7 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         async with self.server() as (api, _, url):
             api.providers['llm'] = FailOnce()
             async with connect(url) as ws:
-                await ws.send(json.dumps({'type': 'start', 'token': TOKEN, 'ui_started': True}))
+                await ws.send(json.dumps({'type': 'start', 'ui_started': True}))
                 await ws.recv()
                 await ws.send(json.dumps({'type': 'text', 'text': '첫 요청'}))
                 async with asyncio.timeout(10):
@@ -58,16 +56,32 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
     async def server(self, *, max_sessions=4, idle_timeout=300):
         providers = dict(llm=FixtureProvider(), tts=FixtureProvider('tts'),
                          **{r: AudioFixture(r) for r in ['stt', 'vad', 'kws']})
-        api = DuplexAPI(providers, TOKEN, max_sessions=max_sessions, idle_timeout=idle_timeout)
+        api = DuplexAPI(providers, max_sessions=max_sessions, idle_timeout=idle_timeout)
         async with serve(api.handle, '127.0.0.1', 0, process_request=api.process_request,
-                         origins=[None, 'http://allowed.test'], compression=None, max_size=65536) as server:
+                         origins=[None, 'http://allowed.test'],
+                         compression=None, max_size=65536) as server:
             port = server.sockets[0].getsockname()[1]
             yield api, f'http://127.0.0.1:{port}', f'ws://127.0.0.1:{port}/v1/realtime'
+
+    async def test_connects_without_token_and_keeps_origin_checks(self):
+        async with self.server() as (_, http, url):
+            async with httpx.AsyncClient() as client:
+                config = (await client.get(http + '/client-config')).json()
+                self.assertEqual(config, {'requires_token': False})
+            async with connect(url, origin='http://allowed.test') as ws:
+                await ws.send(json.dumps({'type': 'start', 'ui_started': True}))
+                self.assertEqual(json.loads(await ws.recv())['type'], 'session_started')
+                await ws.send(json.dumps({'type': 'text', 'text': '시험', 'output_audio': False}))
+                while json.loads(await ws.recv())['type'] != 'turn_done': pass
+                await ws.send(json.dumps({'type': 'close'}))
+            for origin in ('http://foreign.test',):
+                with self.assertRaises(InvalidStatus):
+                    async with connect(url, origin=origin): self.fail('origin check bypassed')
 
     async def test_idle_connection_releases_capacity_but_capture_keeps_it_alive(self):
         async with self.server(max_sessions=1, idle_timeout=.15) as (api, _, url):
             async with connect(url) as ws:
-                await ws.send(json.dumps({'type': 'start', 'token': TOKEN, 'ui_started': True}))
+                await ws.send(json.dumps({'type': 'start', 'ui_started': True}))
                 await ws.recv()
                 for _ in range(8):
                     await ws.send(b'\0\0' * 1600)
@@ -80,7 +94,7 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
             async with asyncio.timeout(2):
                 while api.active: await asyncio.sleep(.01)
             async with connect(url) as next_ws:
-                await next_ws.send(json.dumps({'type': 'start', 'token': TOKEN}))
+                await next_ws.send(json.dumps({'type': 'start'}))
                 self.assertEqual(json.loads(await next_ws.recv())['type'], 'session_started')
 
     async def test_browser_and_health_are_served_on_the_api_origin(self):
@@ -94,10 +108,10 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(result.json()['protocol_version'], 1)
                 self.assertEqual((await client.get(http + '/pyproject.toml')).status_code, 404)
 
-    async def test_authenticated_text_stream_and_playback_ack(self):
+    async def test_tokenless_text_stream_and_playback_ack(self):
         async with self.server() as (_, _, url):
             async with connect(url) as ws:
-                await ws.send(json.dumps({'type': 'start', 'token': TOKEN, 'ui_started': True}))
+                await ws.send(json.dumps({'type': 'start', 'ui_started': True}))
                 self.assertEqual(json.loads(await ws.recv())['type'], 'session_started')
                 await ws.send(json.dumps({'type': 'text', 'text': '시험 대화'}))
                 types = []
@@ -112,12 +126,11 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIn('audio_chunk', types)
                 await ws.send(json.dumps({'type': 'close'}))
 
-    async def test_invalid_credential_and_wrong_origin_are_rejected(self):
+    async def test_token_is_ignored_and_wrong_origin_is_rejected(self):
         async with self.server() as (_, _, url):
             async with connect(url) as ws:
                 await ws.send(json.dumps({'type': 'start', 'token': 'wrong'}))
-                with self.assertRaises(ConnectionClosed): await ws.recv()
-                self.assertEqual(ws.close_code, 1008)
+                self.assertEqual(json.loads(await ws.recv())['type'], 'session_started')
             with self.assertRaises(InvalidStatus) as error:
                 async with connect(url, origin='http://foreign.test'):
                     self.fail('wrong origin admitted')
@@ -126,7 +139,7 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
     async def test_session_capacity_rejects_without_blocking_an_active_session(self):
         async with self.server(max_sessions=1) as (api, _, url):
             async with connect(url) as first:
-                await first.send(json.dumps({'type': 'start', 'token': TOKEN}))
+                await first.send(json.dumps({'type': 'start'}))
                 await first.recv()
                 async with connect(url) as second:
                     with self.assertRaises(ConnectionClosed): await second.recv()

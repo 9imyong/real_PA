@@ -114,7 +114,7 @@ function browser({ handshake = true, microphone = true } = {}) {
   const states = [],
     texts = [],
     errors = [];
-  const listener = new window.RealPAClient({ token: 'unit-browser-credential', microphone, onState: (s) => states.push(s), onText: (t) => texts.push(t), onError: (e) => errors.push(e) });
+  const listener = new window.RealPAClient({ microphone, onState: (s) => states.push(s), onText: (t) => texts.push(t), onError: (e) => errors.push(e) });
   return { listener, sockets, tracks, navigator, states, texts, errors,
     advanceTime: milliseconds => { time += milliseconds; } };
 }
@@ -210,7 +210,7 @@ test('capture remains active during output and acknowledges completed playback',
   const { listener, sockets } = browser();
   await listener.start();
   const socket = sockets[0];
-  assert.deepEqual(socket.sent[0], { type: 'start', token: 'unit-browser-credential', ui_started: true });
+  assert.deepEqual(socket.sent[0], { type: 'start', ui_started: true });
   socket.event({ type: 'interrupted', generation_id: 1 });
   socket.event(audio(1));
   const source = [...listener._sources][0];
@@ -583,6 +583,17 @@ test('spoken interruption finalizes its caption and stays listening', async () =
   assert.equal(tracks[0].stopped, false);
   sockets[0].event({ type: 'transcript_final', generation_id: 1, data: { text: '이전 발화' } });
   assert.equal(transcripts.length, 1);
+  assert.equal(listener.sendText('다음 질문'), true);
+  await listener.stop();
+});
+
+test('empty final transcript keeps listening without waiting for a reply', async () => {
+  const { listener, sockets, tracks, states } = browser();
+  await listener.start();
+  sockets[0].event({ type: 'transcript_final', generation_id: 1, data: { text: '' } });
+  assert.equal(states.at(-1), 'listening');
+  assert.equal(listener.isActive, true);
+  assert.equal(tracks[0].stopped, false);
   assert.equal(listener.sendText('다음 질문'), true);
   await listener.stop();
 });

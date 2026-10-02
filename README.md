@@ -37,9 +37,9 @@ python3 scripts/check-links.py .
 ```
 
 - 문서 검증 요구 환경: Python 3.10 이상
-- API 실행 전 REAL_PA_API_TOKEN에 16자 이상의 접속 키 설정, 브라우저에 같은 값 입력
-- 로컬 실행 대안: `.venv/bin/python scripts/start-local-api.py --config config/local/worker.toml`, 환경 키가 없으면 ignored `config/local/browser.token`을 mode 600으로 생성·재사용
-- 실행기 출력에는 접속 키 값 없음, 해당 파일의 내용을 로컬 브라우저 접속 키 칸에 입력. 종료는 실행 터미널의 Ctrl+C
+- API 접속 키 검증 없음, 기본 실행 후 브라우저·Lemmy 연결 가능
+- 로컬 실행: `.venv/bin/python scripts/start-local-api.py --config config/local/worker.toml`
+- 종료: 실행 터미널의 Ctrl+C
 - 브라우저: localhost:18484, 텍스트는 마이크 권한 없이 사용, 연결 중 음성 입력 전환 가능
 - 모델·GPU 서버 준비: [개발 가이드](docs/guides/development.md#독립-api와-테스트-브라우저)
 - 모델 실행 후보 환경: Linux 또는 WSL2, GPU 모델·메모리·오디오 장치 실측 필요

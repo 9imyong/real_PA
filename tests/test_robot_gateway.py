@@ -101,6 +101,40 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
 
+    async def test_start_system_prompt_leads_every_llm_request(self):
+        providers = self.providers()
+        seen = []
+        stream = providers['llm'].stream
+        def record(request, context):
+            seen.append(request.data['messages'])
+            return stream(request, context)
+        providers['llm'].stream = record
+        providers['llm'].gate.set()
+        socket = Socket()
+        socket.input.put_nowait(json.dumps({'type': 'start', 'ui_started': True, 'system_prompt': '레미 지침'}))
+        task = asyncio.create_task(RobotGateway(providers, None, anonymous=True).handle(socket))
+        try:
+            await socket.wait_type('session_started')
+            for text in ('첫 질문', '두번째 질문'):
+                socket.input.put_nowait(json.dumps({'type': 'text', 'text': text, 'output_audio': False}))
+                done = await socket.wait_type('turn_done')
+                socket.input.put_nowait(json.dumps({'type': 'text_ack', 'generation_id': done['generation_id']}))
+            self.assertEqual(len(seen), 2)
+            for messages in seen:
+                self.assertEqual(messages[0], {'role': 'system', 'content': '레미 지침'})
+                self.assertEqual(sum(m['role'] == 'system' for m in messages), 1)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    async def test_start_rejects_invalid_system_prompt(self):
+        for prompt in ['', '   ', 3, 'a' * 8001]:
+            with self.subTest(prompt=prompt):
+                socket = Socket()
+                socket.input.put_nowait(json.dumps({'type': 'start', 'system_prompt': prompt}))
+                await RobotGateway(self.providers(), None, anonymous=True).handle(socket)
+                self.assertEqual(socket.closed, 1008)
+
     async def test_development_start_rejects_non_object_and_invalid_mode(self):
         for hello in [[], {'type': 'start', 'token': 'a' * 16, 'ui_started': 'false'}]:
             with self.subTest(hello=hello):

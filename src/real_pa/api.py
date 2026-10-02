@@ -4,7 +4,6 @@ import contextlib
 from http import HTTPStatus
 from importlib.resources import files
 import json
-import os
 from urllib.parse import urlsplit
 
 from websockets.http11 import Response
@@ -32,9 +31,11 @@ def response(status, body, content_type='application/json; charset=utf-8'):
 
 
 class DuplexAPI:
-    def __init__(self, providers, token, *, max_sessions=4, idle_timeout=300):
+    def __init__(self, providers, *, max_sessions=4, idle_timeout=300):
         self.providers = providers
-        self.gateway = RobotGateway(providers, token, idle_timeout=idle_timeout)
+        # Public conversation API always runs without an access token.
+        # Worker and robot RPC gateways keep their separate credentials.
+        self.gateway = RobotGateway(providers, None, idle_timeout=idle_timeout, anonymous=True)
         self.max_sessions = max_sessions
         self.active = 0
 
@@ -45,6 +46,8 @@ class DuplexAPI:
         if path == '/healthz':
             return response(HTTPStatus.OK, json.dumps({'status': 'ready', 'protocol_version': 1,
                                                        'roles': sorted(self.providers)}).encode())
+        if path == '/client-config':
+            return response(HTTPStatus.OK, json.dumps({'requires_token': False}).encode())
         asset = ASSETS.get(path)
         if asset is not None:
             name, content_type = asset
@@ -64,18 +67,15 @@ class DuplexAPI:
 
 
 async def serve_api(config_path, host='127.0.0.1', port=18484,
-                    token_env='REAL_PA_API_TOKEN', origins=()):
+                    origins=()):
     from websockets.asyncio.server import serve
     if host not in {'127.0.0.1', 'localhost', '::1'} and not origins:
         raise ConfigurationError('remote API requires explicit browser origins and a TLS proxy')
-    token = os.environ.get(token_env)
-    if not token or len(token) < 16:
-        raise ConfigurationError('API client credential must have at least 16 characters')
     providers = await registry().build(read_config(config_path), REQUIREMENTS)
     try:
-        api = DuplexAPI(providers, token)
+        api = DuplexAPI(providers)
         allowed = list(origins) if origins else [f'http://localhost:{port}', f'http://127.0.0.1:{port}']
-        # Non-browser clients (e.g. future Lemmy service) still authenticate via start.
+        # Lemmy server clients have no browser Origin.
         async with serve(api.handle, host, port, origins=[None, *allowed],
                          process_request=api.process_request, max_size=65536,
                          max_queue=8, compression=None, server_header=None):

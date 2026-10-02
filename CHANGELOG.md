@@ -2,6 +2,16 @@
 
 ## 출시되지 않음
 
+### 추가: 연결 단위 system prompt
+
+- `/v1/realtime` start의 선택적 `system_prompt`, 연결 동안 모든 LLM 요청의 첫 system 메시지로 사용
+- chat_http 운영자 지침과 단일 system 메시지로 병합, Lemmy의 레미 지침 재사용 경로
+
+### 수정: SenseVoice의 무음 환각
+
+- 무음·낮은 잡음에서 `그.` 생성 재현, 100ms AC 신호 RMS 검사로 near-silence decode 생략
+- 정상 신호의 짧은 단어 보존, 빈 final 처리·세션 정리 회귀 검증
+
 ### 수정: 로컬 한국어 대화 품질과 출력 제한
 
 - 자체 chat HTTP adapter의 검증된 system prompt 설정·요청별 주입, 세션 기록 보존

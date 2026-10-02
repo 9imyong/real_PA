@@ -59,6 +59,27 @@ class ChatHttpCancellationTests(unittest.IsolatedAsyncioTestCase):
         finally:
             await provider.close()
 
+    async def test_operator_prompt_merges_into_session_system_message(self):
+        import json
+        messages = [{'role': 'system', 'content': 'session persona'}, {'role': 'user', 'content': 'q'}]
+        config = ProviderConfig('llm', 'chat_http', {'model_id': 'fixture',
+            'features': ['stream', 'cancel'], 'languages': ['ko']},
+            {'base_url': 'http://localhost:1/v1', 'system_prompt': 'operator rule'}, 1, Path('fixture'))
+        seen = []
+        def handler(request):
+            seen.append(json.loads(request.content)['messages'])
+            return httpx.Response(200, text='data: [DONE]\n\n')
+        provider = ChatHttp(config)
+        provider.client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        try:
+            async for _ in provider.stream(Request('llm', {'messages': messages}), Context('s', 1, 1)):
+                pass
+            self.assertEqual(seen[0], [{'role': 'system', 'content': 'operator rule\n\nsession persona'},
+                                       {'role': 'user', 'content': 'q'}])
+            self.assertEqual(messages[0], {'role': 'system', 'content': 'session persona'})
+        finally:
+            await provider.close()
+
     async def test_context_error_is_distinct_from_other_bad_requests(self):
         for error_type, expected in [('exceed_context_size_error', ContextCapacityExceeded),
                                      ('invalid_request_error', ProviderUnavailable)]:

@@ -31,7 +31,6 @@ def main():
     api.add_argument('path')
     api.add_argument('--host', default='127.0.0.1')
     api.add_argument('--port', type=int, default=18484)
-    api.add_argument('--token-env', default='REAL_PA_API_TOKEN')
     api.add_argument('--origin', action='append', default=[])
     check = sub.add_parser('check-config')
     check.add_argument('path')
@@ -53,7 +52,7 @@ def main():
         import asyncio
         from .api import serve_api
         try:
-            asyncio.run(serve_api(args.path, args.host, args.port, args.token_env, args.origin))
+            asyncio.run(serve_api(args.path, args.host, args.port, args.origin))
         except KeyboardInterrupt:
             pass
     elif args.command == 'robot':

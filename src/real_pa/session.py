@@ -8,8 +8,10 @@ from .contracts import Context, Event, Request, ProviderError, ResourceExhausted
 
 class DialogueSession:
     def __init__(self, session_id, llm, tts, *, timeout=30.0, max_output=32,
-                 max_history=40):
+                 max_history=40, system_prompt=None):
         self.session_id = session_id
+        # Connection-scoped instructions; never trimmed with conversation history.
+        self.system = [{'role': 'system', 'content': system_prompt}] if system_prompt else []
         self.llm, self.tts = llm, tts
         self.timeout = timeout
         self.output = asyncio.Queue(maxsize=max_output)
@@ -132,7 +134,8 @@ class DialogueSession:
             context.check()
             emitted = False
             try:
-                async for event in self.llm.stream(Request('llm', {'messages': messages}, local), context):
+                request = Request('llm', {'messages': self.system + messages}, local)
+                async for event in self.llm.stream(request, context):
                     context.check()
                     if not emitted and len(messages) < len(original):
                         removed = len(original) - len(messages)

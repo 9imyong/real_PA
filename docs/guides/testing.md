@@ -432,3 +432,32 @@ node --check src/real_pa/browser/capture.js
 - 시간 기준은 음성 단계 시작부터 응답 완료까지, 대기 상태만 유지하는 시간 측정 제외
 - 현재 실행 증거: ignored `artifacts/browser-qwen3-8b-30min-voice.json`, `running`은 완료 판정 제외
 - 합성 입력·무음 출력·로컬 GPU/Chromium 조건, 실제 Windows 장치/AEC·WAN 결과와 구분
+
+## 동시 음성 부하 진단
+
+- 실행: `.venv/bin/python scripts/voice-load-smoke.py --config config/local/qwen3-8b/worker.toml --concurrency 1 2 4 8 16 --rounds 5 --output artifacts/voice-load-capacity.json`
+- 별도 loopback 시험 API·실제 공유 모델·100ms PCM 입력·지속 무음 capture·오디오 길이에 맞춘 ACK 사용
+- live API 세션 분리, LLM GPU endpoint 공유에 따른 경합 가능. 제품 API 기본 연결 상한은 4, 시험 API 상한만 단계별 최대값 적용
+- 첫 오디오 지연: AC RMS 0.001 이상인 마지막 합성 음성 frame 전송 → 첫 audio chunk 수신. 실제 사람 발화 종료·물리 재생 지연 제외
+- RAM RSS: 시험 API/모델과 같은 프로세스의 부하 driver 포함, 기존 API·LLM·Windows browser 제외. stage baseline과 sampled peak·lifetime peak 구분
+- GPU 메모리: GPU 전체의 1초 간격 표본, live 서비스 포함·사용자별 독립 비용으로 해석 금지
+- CPU: 시험 API/driver process의 평균 CPU 시간, 100%는 코어 1개 상당. 순간 peak·LLM CUDA CPU 시간·호스트 전체 CPU 제외
+- 실패 client와 완료 요청 모두 집계, 실패 stage 이후 높은 동시성 진행 중단·전체 실패율 별도 검토
+- 5회/client 시험의 p95는 예비 지표, 50명 서버 구매·전체 한국어 품질·WAN/물리 AEC 지원 인증 근거로 사용 금지
+- 가입자 1000명·동시 음성 사용자 50명은 사용자 답변 기준, 서버 수는 목표 지연을 만족하는 지속 동시성·응답 길이·가용성 여유로 산정
+
+### 2026-10-02 예비 부하 결과
+
+| 동시 합성 음성 client | 완료/요청 | 실패 client | 첫 오디오 p95 | 시험 API/driver peak RSS |
+| --- | --- | --- | --- | --- |
+| 1 | 5/5 | 0 | 1.668초 | 814MiB |
+| 2 | 10/10 | 0 | 2.266초 | 856MiB |
+| 4 | 20/20 | 0 | 3.215초 | 960MiB |
+| 8 | 40/40 | 0 | 4.137초 | 1018MiB |
+| 16 | 5/80 | 15 | 전체 합격 판단 제외 | 1020MiB |
+
+- 증거: ignored `artifacts/voice-load-capacity.json`, RTX 3090·Qwen3-8B·SenseVoice·Supertonic·16 logical CPU/WSL 조건
+- 8명 단계의 평균 benchmark CPU 358.1%(약 3.58 core 상당), GPU 전체 sampled peak 8889MiB. live 서비스 경합·RAM의 단계별 allocator 잔류 포함
+- 별도 16명 진단 `voice-load-16-diagnostic.json`: 11/16 완료·5개 capture queue overflow, 성공 요청 p95 7.092초. 원래 80회 시험 실패와 표본/상태 차이 유지
+- 50명 가정 계산: 동일 응답/빈도의 8명 단위를 단순 복제하면 최소 7개 처리 단위, 30% 여유 가정 시 9개. GPU 서버 대수·지연 보장·서버 구매 사양 확정 근거 제외
+- 현재 API 기본 상한 4 유지, 시험에서만 확장. LLM 슬롯/음성 모델 lock·worker 분산·긴 대화/소음/혼합 입력·WAN 시험 후 제품 상한 결정 필요

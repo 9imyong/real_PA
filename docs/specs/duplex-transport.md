@@ -8,11 +8,11 @@
 
 ## 인증과 소유권
 
-- standalone API: start의 접속 token 확인, 브라우저 Origin allowlist, 기본 최대 4개 연결
+- standalone API: 접속 token 검증 없음, 브라우저 Origin allowlist, 기본 최대 4개 연결
 - standalone 연결: 입출력 메시지 없는 300초 이후 close code 4000·유휴 안내·세션 회수, capture PCM/응답 출력 중 연결 유지
 - 해당 상한은 전송 유휴 조건, 마이크를 켠 사용자 침묵의 의미상 종료와 구분. RobotGateway/인증된 Lemmy 경로 기본 종료 정책 변경 제외
-- 접속 credential은 REAL_PA_API_TOKEN 환경 소유, 브라우저 입력은 임시 메모리만 사용
-- 원격 접속은 TLS proxy·wss, 미래 Lemmy 서버 클라이언트도 같은 start 인증 사용
+- API 접속 키 환경 변수·입력 UI·인증 실행 옵션 없음
+- 원격 접속은 TLS proxy·wss, Lemmy 서버의 Origin 없는 연결 허용
 - Lemmy 개인 도구 권한은 API 접속 키만으로 부여하지 않음, 실제 업무 권한 연동은 후속 단계
 - session_id: 서버 생성 UUID, client의 user/session/binding 값으로 소유권 변경 금지
 - 회사 worker credential: Backend 환경 소유, 브라우저 전달 금지
@@ -30,7 +30,7 @@
 
 | 메시지 | 형식 | 동작 |
 | --- | --- | --- |
-| start | `{"type":"start","token":"접속 키","ui_started":true}` | 최초 handshake, true로 호출어 없이 지속 대화 |
+| start | `{"type":"start","ui_started":true}` | 최초 handshake, true로 호출어 없이 지속 대화, 선택적 system_prompt |
 | PCM | binary 3200byte | PCM16 little-endian mono 16000Hz, 정확히 100ms |
 | listen | `{"type":"listen"}` | 이전 생성 중단 후 호출어 없이 듣기 활성화 |
 | interrupt | `{"type":"interrupt"}` | generation 변경·출력 폐기, 입력은 지속 |
@@ -45,7 +45,10 @@
 - 출력 clock 정지 시 기존 생성 취소·미재생 audio ACK 금지·마이크/음성 출력 off·오류 안내, 같은 연결의 텍스트 요청 유지
 - 음성 입출력은 출력 장치 확인 후 사용자의 명시적 새 연결로 복구, 외부 AI 전환/자동 발화 재전송 없음
 
-- handshake: 10초·최대 4096자, ui_started는 boolean만 허용
+- handshake: 10초·최대 52096자(JSON escape 포함), ui_started는 boolean만 허용
+- system_prompt: 선택, 공백 아닌 문자열·최대 8000자, 연결 동안 모든 LLM 요청의 첫 system 메시지·문맥 축소 대상 제외
+- chat_http 설정 system_prompt와 함께 쓰면 운영자 지침 뒤에 연결 지침을 이어 하나의 system 메시지로 전송
+- Lemmy는 서버에서 조합한 레미 지침만 전달, 브라우저 start의 system_prompt는 upstream 미전달
 - 이후 단일 메시지: 최대 65536byte/자, 입력 큐 초과 시 세션 실패
 - 브라우저: 시작 gesture/마이크 권한·echoCancellation 활성 설정 필요
 - 테스트 콘솔의 출력 AudioContext는 48kHz, generic client는 outputSampleRate 미지정 시 장치 기본 rate 사용
@@ -96,7 +99,7 @@
 - 브라우저 미완료 재생 중 오디오 시계가 3초간 정지하면 장치 오류 안내·미재생 chunk ACK 금지·음성 입출력 정리, 동일 연결의 텍스트 모드 유지
 - 재생 완료·끼어들기·연결 종료 시 시계 감시 timer 해제, 자동 재생 성공/재연결 주장 제외
 
-- 1008: 접속 키·start 형식 불충족
+- 1008: start 형식 불충족
 - 1013: 동시 세션 상한, 기존 세션은 유지
 - 4401: 선택적 승인 문맥 재검증 실패, 기존 Lemmy 통합 참고 경로의 코드
 - 회사 추론 실패: `duplex_unavailable`/`robot_session_failed`, 외부 AI fallback 없음
@@ -115,3 +118,10 @@
 - `/healthz`: 모델 provider load 이후 ready·protocol_version·역할 목록, 실제 대화 품질/장치 인수 의미 아님
 - `/v1/realtime`: WebSocket streaming API, 단일 텍스트 POST 반복 호출로 대체하지 않음
 - 키·모델 파일·임의 경로의 HTTP 다운로드 제공 금지
+
+## 명시적 키 없는 브라우저 모드
+
+- API 기본 anonymous mode에서 start의 token 생략 허용, `ui_started`·메시지 형식·Origin·세션 상한 검증 유지
+- 테스트 UI 접속 키 입력 제거, `/client-config`는 호환 응답 `requires_token=false` 유지
+- CLI API·로컬 실행기 모두 키 없는 모드 기본, `--require-token`으로 인증 선택. robot/worker 인증 변경 없음
+- 인증된 사용자 식별·Lemmy 도구 권한 부여와 별개인 anonymous 대화 모드

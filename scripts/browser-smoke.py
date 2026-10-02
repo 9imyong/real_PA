@@ -95,7 +95,7 @@ async def main(args):
         raise ValueError('voice turns must be between one and 1000')
     providers = await registry().build(read_config(args.config), REQUIREMENTS)
     token = secrets.token_urlsafe(32)
-    api = DuplexAPI(providers, token)
+    api = DuplexAPI(providers)
     origins = [None]
     timings = []
     observed = {}

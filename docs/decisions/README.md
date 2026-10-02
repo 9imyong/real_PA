@@ -18,3 +18,5 @@
 - [ADR-0005](ADR-0005-company-gpu-robot.md): 회사 GPU 추론·로봇 제어, 사용자 확정·승인됨
 - [ADR-0006](ADR-0006-standalone-cloud-api.md): 최신 사용자 지시, 독립 브라우저·클라우드 대화 API 우선, ADR-0005 배치 대체
 - [ADR-0007](ADR-0007-confirmed-robot-control.md): 사용자 추가 답변, 최종 로봇의 입출력·대화 제어와 자체 GPU 추론 분리, 독립 브라우저 검증 유지
+- [ADR-0008](ADR-0008-client-routed-tools.md): 클라이언트 라우팅·클라이언트 실행 도구, real-PA는 정의·호출 위임만 담당
+- [ADR-0009](ADR-0009-strong-signal-prefetch.md): ADR-0008 보완, 강한 신호 조회의 결정적 사전 실행과 실패 시 고정 안내(fail-closed)

@@ -3,13 +3,16 @@ import asyncio
 import copy
 import json
 import re
+from dataclasses import dataclass, field
 
-from .contracts import Event
+from .contracts import Event, Request
 
 MAX_TOOLS = 16
 MAX_TOOLS_JSON = 32768
 MAX_RESULT_BYTES = 65536
 TOOL_CHOICES = frozenset({'auto', 'required', 'none'})
+MAX_PREFETCHED = 4
+MAX_REPLY = 500
 _NAME = re.compile(r'[A-Za-z0-9_-]{1,64}')
 _ID = re.compile(r'[A-Za-z0-9_:.-]{1,128}')
 
@@ -33,6 +36,60 @@ def validate_tools(tools):
     return registered
 
 
+def _json_size(value):
+    return len(json.dumps(value, ensure_ascii=False, allow_nan=False).encode())
+
+
+@dataclass
+class Route:
+    """One turn's routing decision from the client.
+
+    ``prefetched``: lookups the client already executed (deterministic arguments);
+    the model only answers from them and gets no tools. ``reply``: fixed text spoken
+    instead of generating, e.g. a fail-closed notice when a required lookup failed.
+    """
+    tools: list = field(default_factory=list)
+    choice: str = 'none'
+    prefetched: list = field(default_factory=list)
+    reply: str | None = None
+
+
+class PrefetchedAnswer:
+    """LLM wrapper that replays client-executed lookups as this turn's tool messages."""
+
+    def __init__(self, llm, calls, reply):
+        self.llm, self.calls, self.reply = llm, calls, reply
+        self.capabilities = llm.capabilities
+
+    def _results(self):
+        return [Event('tool_result', {'call': {k: c[k] for k in ('id', 'name', 'arguments')}, 'result': c['result']})
+                for c in self.calls]
+
+    async def stream(self, request, context):
+        if self.reply is not None:
+            for event in self._results():
+                yield event
+            yield Event('text_delta', {'text': self.reply})
+            yield Event('completed')
+            return
+        messages = list(request.data['messages'])
+        messages.append({'role': 'assistant', 'content': None, 'tool_calls': [
+            {'id': c['id'], 'type': 'function', 'function': {
+                'name': c['name'], 'arguments': json.dumps(c['arguments'], ensure_ascii=False)}} for c in self.calls]})
+        messages += [{'role': 'tool', 'tool_call_id': c['id'], 'content': json.dumps(c['result'], ensure_ascii=False)}
+                     for c in self.calls]
+        pending = self._results()
+        # Results join the history only once the model accepted the request, so a
+        # capacity retry with trimmed history never records them twice.
+        async for event in self.llm.stream(Request('llm', {'messages': messages}, request.local), context):
+            while pending:
+                yield pending.pop(0)
+            yield event
+
+    async def reset(self, session_id):
+        await self.llm.reset(session_id)
+
+
 class ClientToolBridge:
     """Per-connection broker; real-PA holds definitions but never tool code."""
 
@@ -50,24 +107,36 @@ class ClientToolBridge:
         try:
             await emit(Event('route_request', {'request_id': request_id, 'text': text}))
             try:
-                names, choice = await asyncio.wait_for(future, self.route_timeout)
+                route = await asyncio.wait_for(future, self.route_timeout)
             except TimeoutError:
-                return [], 'none'
+                return Route()
         finally:
             self._routes.pop(request_id, None)
-        if not names or choice == 'none':
-            return [], 'none'
-        return [copy.deepcopy(self.tools[name]) for name in names], choice
+        if route.prefetched or route.reply is not None:
+            return route
+        if not route.tools or route.choice == 'none':
+            return Route()
+        route.tools = [copy.deepcopy(self.tools[name]) for name in route.tools]
+        return route
 
     def resolve_route(self, command):
         future = self._routes.get(command.get('request_id'))
         if future is None or future.done():
             return  # Late or unknown routes belong to a superseded turn.
         names, choice = command.get('tools', []), command.get('tool_choice', 'auto')
-        valid = (isinstance(names, list) and len(names) <= MAX_TOOLS
-                 and all(isinstance(name, str) and name in self.tools for name in names)
-                 and len(set(names)) == len(names) and choice in TOOL_CHOICES)
-        future.set_result((names, choice) if valid else ([], 'none'))
+        prefetched, reply = command.get('prefetched', []), command.get('reply')
+        try:
+            valid = (isinstance(names, list) and len(names) <= MAX_TOOLS
+                     and all(isinstance(name, str) and name in self.tools for name in names)
+                     and len(set(names)) == len(names) and choice in TOOL_CHOICES
+                     and isinstance(prefetched, list) and len(prefetched) <= MAX_PREFETCHED
+                     and all(isinstance(item, dict) and item.get('name') in self.tools
+                             and isinstance(item.get('arguments'), dict) and isinstance(item.get('result'), dict)
+                             and _json_size(item['result']) <= MAX_RESULT_BYTES for item in prefetched)
+                     and (reply is None or (isinstance(reply, str) and reply.strip() and len(reply) <= MAX_REPLY)))
+        except ValueError:
+            valid = False
+        future.set_result(Route(names, choice, copy.deepcopy(prefetched), reply) if valid else Route())
 
     async def execute(self, call, operation_key, emit):
         """Delegate one model call; timeouts and bad output are failure results."""

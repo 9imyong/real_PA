@@ -130,15 +130,19 @@ class DialogueSession:
     async def _turn_llm(self, context, local, user_message):
         if self.client_tools is None:
             return self.llm
+        from .client_tools import PrefetchedAnswer
         emit = lambda event: self._emit(context, event)
-        tools, choice = await self.client_tools.route(local['request_id'], user_message['content'], emit)
-        if not tools:
+        route = await self.client_tools.route(local['request_id'], user_message['content'], emit)
+        if route.prefetched or route.reply is not None:
+            calls = [dict(item, id=f'pre_{context.turn_id}_{index}') for index, item in enumerate(route.prefetched, 1)]
+            return PrefetchedAnswer(self.llm, calls, route.reply)
+        if not route.tools:
             return self.llm
         from .tool_loop import ToolLoop
         bridge = self.client_tools
         async def execute(call, call_context, call_local, operation_key):
             return await bridge.execute(call, operation_key, lambda event: self._emit(call_context, event))
-        return ToolLoop(self.llm, tools, execute, tool_choice=choice)
+        return ToolLoop(self.llm, route.tools, execute, tool_choice=route.choice)
 
     async def _llm_events(self, context, local, llm=None):
         llm = llm or self.llm

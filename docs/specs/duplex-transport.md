@@ -137,7 +137,7 @@
 | --- | --- | --- | --- |
 | C→S | start | `tools`: function 정의 배열(최대 16), `route`: boolean | 연결 동안 사용할 도구 후보 등록 |
 | S→C | route_request | data.request_id·text | 발화 확정 후 LLM 시작 전 라우팅 요청 |
-| C→S | route | request_id, `tools`: 이름 배열, `tool_choice`: auto/required/none | 이번 턴 도구 부분집합 결정 |
+| C→S | route | request_id, `tools`: 이름 배열, `tool_choice`: auto/required/none, 선택 `prefetched`·`reply` | 이번 턴 도구 부분집합 결정 |
 | S→C | tool_call | data.call_id·name·arguments·request_id | LLM 도구 호출의 실행 위임 |
 | C→S | tool_output | call_id, `result`: JSON object | 실행 결과 반환, 응답 계속 |
 
@@ -148,6 +148,9 @@
 - `required`는 부분집합이 1개 이상일 때만 유효, 빈 부분집합은 도구 없이 진행
 - 기존 tool_started·tool_result 이벤트는 유지, 클라이언트 반환 메시지는 이름 충돌 방지를 위해 tool_output 사용
 - 인자 검증·기본값·권한 판단은 클라이언트 책임, 모델 인자를 그대로 신뢰 금지
+- `prefetched`: 클라이언트가 이미 실행한 조회 최대 4개(`name`·`arguments`·`result` object, 결과 65536byte 이하). 이번 턴 도구 메시지로 넣고 도구 없이 답변만 생성([ADR-0009](../decisions/ADR-0009-strong-signal-prefetch.md))
+- `reply`: 공백 아닌 500자 이하 고정 문장. LLM 호출 없이 그대로 출력·음성 합성(조회 실패 안내 등 fail-closed). `prefetched`와 함께면 결과도 기록에 남김
+- `prefetched`·`reply`가 형식에 맞지 않으면 route 전체를 도구 없음으로 처리
 - `required`는 첫 LLM 라운드에만 적용, 결과 수신 후 라운드는 자유 응답
 - `required` 라운드는 비스트리밍·최대 96 token 요청, 호출 전 텍스트는 발화하지 않고 폐기(llama.cpp 스트리밍 파서의 호출 유실 회피)
 - 강제 라운드에 호출이 없거나 잘린 호출이면 그 출력은 버리고 `tool_choice` 없이 스트리밍 답변으로 전환(실측: 거절 시 7.8초 지연 방지)

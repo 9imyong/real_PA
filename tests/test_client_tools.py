@@ -3,7 +3,7 @@ import asyncio
 import json
 import unittest
 
-from real_pa.client_tools import ClientToolBridge, validate_tools
+from real_pa.client_tools import ClientToolBridge, Route, validate_tools
 from real_pa.contracts import Capabilities, Event
 from real_pa.robot_gateway import RobotGateway
 from test_robot import AudioFixture
@@ -103,18 +103,21 @@ class ClientToolTests(unittest.IsolatedAsyncioTestCase):
 
         async def emit(event):
             emitted.append(event.kind)
-        self.assertEqual(await bridge.route('r1', '안녕', emit), ([], 'none'))
+        self.assertEqual(await bridge.route('r1', '안녕', emit), Route())
         self.assertEqual(emitted, ['route_request'])
 
     async def test_unknown_tool_or_choice_routes_to_no_tools(self):
         for route in [{'tools': ['delete_everything']}, {'tools': ['get_weather'], 'tool_choice': 'force'},
-                      {'tools': 'get_weather'}]:
+                      {'tools': 'get_weather'},
+                      {'prefetched': [{'name': 'delete_everything', 'arguments': {}, 'result': {}}]},
+                      {'prefetched': [{'name': 'get_weather', 'arguments': {}, 'result': 'sunny'}]},
+                      {'reply': '   '}, {'reply': 'x' * 501}]:
             with self.subTest(route=route):
                 bridge = ClientToolBridge([WEATHER])
 
                 async def emit(event):
                     bridge.resolve_route({'request_id': 'r1', **route})
-                self.assertEqual(await bridge.route('r1', 'x', emit), ([], 'none'))
+                self.assertEqual(await bridge.route('r1', 'x', emit), Route())
 
     async def test_tool_output_timeout_and_invalid_result_are_failures(self):
         bridge = ClientToolBridge([WEATHER], tool_timeout=0.01)
@@ -146,6 +149,47 @@ class ClientToolTests(unittest.IsolatedAsyncioTestCase):
             request = await socket.wait_type('route_request')
             socket.input.put_nowait(json.dumps({'type': 'route', 'request_id': request['data']['request_id']}))
             self.assertEqual((await socket.wait_type('text_delta'))['data']['text'], '안녕하세요.')
+        finally:
+            await self.close(task)
+
+    async def test_prefetched_lookup_is_answered_without_offering_tools(self):
+        llm = ToolLLM()
+        socket, task = await self.connect(self.providers(llm), route=True, tools=[WEATHER, YOUTUBE])
+        try:
+            self.say(socket, '밖에 나가도 될까?')
+            request = await socket.wait_type('route_request')
+            socket.input.put_nowait(json.dumps({'type': 'route', 'request_id': request['data']['request_id'],
+                'prefetched': [{'name': 'get_weather', 'arguments': {'location': None}, 'result': {'sky': 'clear'}}]}))
+            self.assertEqual((await socket.wait_type('text_delta'))['data']['text'], '맑아요.')
+            done = await socket.wait_type('turn_done')
+            socket.input.put_nowait(json.dumps({'type': 'text_ack', 'generation_id': done['generation_id']}))
+            (request_data,) = llm.requests  # one LLM round, no forced tool decision
+            self.assertNotIn('tools', request_data)
+            assistant, tool = request_data['messages'][-2:]
+            self.assertEqual(assistant['tool_calls'][0]['function']['name'], 'get_weather')
+            self.assertEqual(json.loads(tool['content']), {'sky': 'clear'})
+            # The lookup stays in history for follow-up turns.
+            self.say(socket, '고마워')
+            request = await socket.wait_type('route_request')
+            socket.input.put_nowait(json.dumps({'type': 'route', 'request_id': request['data']['request_id']}))
+            await socket.wait_type('turn_done')
+            roles = [m['role'] for m in llm.requests[-1]['messages']]
+            self.assertIn('tool', roles)
+        finally:
+            await self.close(task)
+
+    async def test_fixed_reply_is_spoken_without_any_llm_call(self):
+        llm = ToolLLM()
+        socket, task = await self.connect(self.providers(llm), route=True, tools=[WEATHER])
+        try:
+            self.say(socket, '날씨 어때')
+            request = await socket.wait_type('route_request')
+            socket.input.put_nowait(json.dumps({'type': 'route', 'request_id': request['data']['request_id'],
+                'prefetched': [{'name': 'get_weather', 'arguments': {}, 'result': {'error': 'tool_failed'}}],
+                'reply': '지금 날씨 정보를 확인하지 못했어요.'}))
+            self.assertEqual((await socket.wait_type('text_delta'))['data']['text'], '지금 날씨 정보를 확인하지 못했어요.')
+            await socket.wait_type('turn_done')
+            self.assertEqual(llm.requests, [])  # fail-closed: the model never answers from memory
         finally:
             await self.close(task)
 

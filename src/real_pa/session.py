@@ -8,11 +8,12 @@ from .contracts import Context, Event, Request, ProviderError, ResourceExhausted
 
 class DialogueSession:
     def __init__(self, session_id, llm, tts, *, timeout=30.0, max_output=32,
-                 max_history=40, system_prompt=None):
+                 max_history=40, system_prompt=None, client_tools=None):
         self.session_id = session_id
         # Connection-scoped instructions; never trimmed with conversation history.
         self.system = [{'role': 'system', 'content': system_prompt}] if system_prompt else []
         self.llm, self.tts = llm, tts
+        self.client_tools = client_tools
         self.timeout = timeout
         self.output = asyncio.Queue(maxsize=max_output)
         self.generation = 0
@@ -125,7 +126,21 @@ class DialogueSession:
             await self.ack_event.wait()
             context.check()
 
-    async def _llm_events(self, context, local):
+    async def _turn_llm(self, context, local, user_message):
+        if self.client_tools is None:
+            return self.llm
+        emit = lambda event: self._emit(context, event)
+        tools, choice = await self.client_tools.route(local['request_id'], user_message['content'], emit)
+        if not tools:
+            return self.llm
+        from .tool_loop import ToolLoop
+        bridge = self.client_tools
+        async def execute(call, call_context, call_local, operation_key):
+            return await bridge.execute(call, operation_key, lambda event: self._emit(call_context, event))
+        return ToolLoop(self.llm, tools, execute, tool_choice=choice)
+
+    async def _llm_events(self, context, local, llm=None):
+        llm = llm or self.llm
         # Fit by whole oldest turns only after an explicit capacity rejection.
         # Keep the original history until the reduced request is accepted.
         original = list(self.history)
@@ -135,7 +150,7 @@ class DialogueSession:
             emitted = False
             try:
                 request = Request('llm', {'messages': self.system + messages}, local)
-                async for event in self.llm.stream(request, context):
+                async for event in llm.stream(request, context):
                     context.check()
                     if not emitted and len(messages) < len(original):
                         removed = len(original) - len(messages)
@@ -188,7 +203,8 @@ class DialogueSession:
                     speaker = group.create_task(synthesize()) if output_audio else None
                     buffer = ''
                     completed = False
-                    async for event in self._llm_events(context, local):
+                    llm = await self._turn_llm(context, local, user_message)
+                    async for event in self._llm_events(context, local, llm):
                         if event.kind != 'context_trimmed':
                             produced_output = True
                         await self._emit(context,event)

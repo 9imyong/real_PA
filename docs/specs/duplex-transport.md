@@ -126,9 +126,9 @@
 - CLI API·로컬 실행기 모두 키 없는 모드 기본, `--require-token`으로 인증 선택. robot/worker 인증 변경 없음
 - 인증된 사용자 식별·Lemmy 도구 권한 부여와 별개인 anonymous 대화 모드
 
-## 클라이언트 라우팅 도구 (초안, T009)
+## 클라이언트 라우팅 도구 (T009)
 
-- 결정: [ADR-0008](../decisions/ADR-0008-client-routed-tools.md). 구현·실제 8B 검증 전 초안
+- 결정: [ADR-0008](../decisions/ADR-0008-client-routed-tools.md). real-PA 구현·fixture 계약·실제 8B 왕복 확인, Lemmy 연동 전
 - start에 `route: true`와 `tools`가 모두 있을 때만 활성, 미지정 연결은 기존 동작 불변
 - 실행 코드는 클라이언트 소유, real-PA는 정의·호출 요청·결과 전달만 담당
 
@@ -147,3 +147,6 @@
 - `required`는 부분집합이 1개 이상일 때만 유효, 빈 부분집합은 도구 없이 진행
 - 기존 tool_started·tool_result 이벤트는 유지, 클라이언트 반환 메시지는 이름 충돌 방지를 위해 tool_output 사용
 - 인자 검증·기본값·권한 판단은 클라이언트 책임, 모델 인자를 그대로 신뢰 금지
+- `required`는 첫 LLM 라운드에만 적용, 결과 수신 후 라운드는 자유 응답
+- `required` 라운드는 비스트리밍 요청, 호출 전 텍스트는 발화하지 않고 폐기(llama.cpp 스트리밍 파서의 호출 유실 회피)
+- start의 `tools` 사용에는 LLM manifest `tools` feature 필요, 미충족 시 1008

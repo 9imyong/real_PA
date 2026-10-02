@@ -7,6 +7,7 @@ import re
 import uuid
 import math
 from .adapters.rpc import encode
+from .client_tools import ClientToolBridge
 from .robot import RobotRuntime
 from .session import DialogueSession
 from .speech_controls import utterance_control
@@ -16,7 +17,7 @@ MAX_SYSTEM_PROMPT = 8000
 
 
 async def run_connection(ws, providers, session_id, *, ui_started=False, authorize=None,
-                         idle_timeout=None, system_prompt=None):
+                         idle_timeout=None, system_prompt=None, client_tools=None):
     """Run an already authenticated connection with a server-owned session ID.
 
     ``authorize`` must revalidate the original user/binding, never a client field.
@@ -24,7 +25,7 @@ async def run_connection(ws, providers, session_id, *, ui_started=False, authori
     The websocket facade supplies recv, send, close, and async iteration.
     """
     session = DialogueSession(session_id, providers['llm'], providers['tts'], timeout=60,
-                              system_prompt=system_prompt)
+                              system_prompt=system_prompt, client_tools=client_tools)
     runtime = RobotRuntime(session, providers)
     tasks = []
     if idle_timeout is not None and (not math.isfinite(idle_timeout) or idle_timeout <= 0):
@@ -86,6 +87,10 @@ async def run_connection(ws, providers, session_id, *, ui_started=False, authori
                     await runtime.reset_input()
                     await session.submit(text, metadata={'request_id': request_id, 'source': 'text',
                                                          'output_audio': output_audio})
+            elif kind == 'route' and client_tools is not None:
+                client_tools.resolve_route(command)
+            elif kind == 'tool_output' and client_tools is not None:
+                client_tools.resolve_output(command)
             elif kind == 'close':
                 return
             else:
@@ -153,7 +158,7 @@ class RobotGateway:
     async def handle(self, ws):
         try:
             raw = await asyncio.wait_for(ws.recv(), 10)
-            if not isinstance(raw, str) or len(raw) > 6 * MAX_SYSTEM_PROMPT + 4096:
+            if not isinstance(raw, str) or len(raw) > 65536:
                 raise ValueError('invalid start')
             hello = json.loads(raw)
             if not isinstance(hello, dict) or hello.get('type') != 'start':
@@ -162,6 +167,11 @@ class RobotGateway:
             if system_prompt is not None and (not isinstance(system_prompt, str) or not system_prompt.strip()
                                               or len(system_prompt) > MAX_SYSTEM_PROMPT):
                 raise ValueError('invalid system prompt')
+            client_tools = None
+            if hello.get('route', False) is not False or 'tools' in hello:
+                if hello.get('route') is not True or 'tools' not in self.providers['llm'].capabilities.features:
+                    raise ValueError('client tools require route and an LLM with tools')
+                client_tools = ClientToolBridge(hello['tools'])
             if not self.anonymous and not secrets.compare_digest(str(hello.get('token', '')), self.token):
                 raise ValueError('invalid credential')
             if type(hello.get('ui_started', False)) is not bool:
@@ -173,4 +183,4 @@ class RobotGateway:
             return
         await run_connection(ws, self.providers, str(uuid.uuid4()),
                              ui_started=hello.get('ui_started', False), idle_timeout=self.idle_timeout,
-                             system_prompt=system_prompt)
+                             system_prompt=system_prompt, client_tools=client_tools)

@@ -2,6 +2,12 @@
 
 ## 출시되지 않음
 
+### 추가: 클라이언트 라우팅 도구
+
+- start `route`·`tools`, 턴별 `route_request`/`route`와 `tool_call`/`tool_output`으로 클라이언트가 도구 선택·실행
+- `tool_choice=required`는 첫 라운드에만 비스트리밍으로 적용, 호출 전 텍스트 미발화
+- 실제 8B 왕복 진단 `scripts/client-tools-smoke.py`
+
 ### 추가: 연결 단위 system prompt
 
 - `/v1/realtime` start의 선택적 `system_prompt`, 연결 동안 모든 LLM 요청의 첫 system 메시지로 사용

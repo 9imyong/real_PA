@@ -80,6 +80,31 @@ class ChatHttpCancellationTests(unittest.IsolatedAsyncioTestCase):
         finally:
             await provider.close()
 
+    async def test_forced_tool_round_is_read_whole_and_drops_pre_call_text(self):
+        import json
+        bodies = []
+        def handler(request):
+            bodies.append(json.loads(request.content))
+            return httpx.Response(200, json={'choices': [{'message': {
+                'content': '날씨를 확인해 볼게요.</think>',
+                'tool_calls': [{'id': 'c1', 'type': 'function',
+                                'function': {'name': 'get_weather', 'arguments': '{"location": "부산"}'}}]}}]})
+        config = ProviderConfig('llm', 'chat_http', {'model_id': 'fixture',
+            'features': ['stream', 'cancel', 'tools'], 'languages': ['ko']},
+            {'base_url': 'http://localhost:1/v1'}, 1, Path('fixture'))
+        provider = ChatHttp(config)
+        provider.client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        tools = [{'type': 'function', 'function': {'name': 'get_weather', 'parameters': {}}}]
+        try:
+            events = [e async for e in provider.stream(Request('llm', {
+                'messages': [{'role': 'user', 'content': 'q'}], 'tools': tools, 'tool_choice': 'required'}),
+                Context('s', 1, 1))]
+            self.assertEqual([e.kind for e in events], ['tool_call', 'completed'])
+            self.assertEqual(events[0].data, {'id': 'c1', 'name': 'get_weather', 'arguments': {'location': '부산'}})
+            self.assertEqual((bodies[0]['stream'], bodies[0]['tool_choice']), (False, 'required'))
+        finally:
+            await provider.close()
+
     async def test_context_error_is_distinct_from_other_bad_requests(self):
         for error_type, expected in [('exceed_context_size_error', ContextCapacityExceeded),
                                      ('invalid_request_error', ProviderUnavailable)]:

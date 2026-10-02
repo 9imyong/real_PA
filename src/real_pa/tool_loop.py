@@ -9,7 +9,7 @@ from .contracts import Event, Request, InvalidOutput, ResourceExhausted
 
 class ToolLoop:
     def __init__(self, provider, tools, execute, *, system_prompt='',
-                 write_tools=frozenset(), max_rounds=4, max_calls=8):
+                 write_tools=frozenset(), max_rounds=4, max_calls=8, tool_choice=None):
         provider.capabilities.require({'stream', 'cancel', 'tools'})
         self.provider = provider
         self.capabilities = provider.capabilities
@@ -19,6 +19,7 @@ class ToolLoop:
         self.system_prompt = system_prompt
         self.write_tools = frozenset(write_tools)
         self.max_rounds, self.max_calls = max_rounds, max_calls
+        self.tool_choice = tool_choice
         self.business_tasks = set()
 
     async def load(self):
@@ -50,10 +51,15 @@ class ToolLoop:
         local = dict(request.local)
         local.setdefault('request_id', str(uuid.uuid4()))
         count = 0
-        for _ in range(self.max_rounds):
+        for round_index in range(self.max_rounds):
             calls, text, completed = [], '', False
             # local (including biometric audio) NEVER crosses the LLM RPC boundary.
-            upstream = Request('llm', {'messages': messages, 'tools': self.tools})
+            data = {'messages': messages, 'tools': self.tools}
+            # Forcing applies to the first round only; later rounds must be free
+            # to answer from the results instead of calling again.
+            if self.tool_choice and round_index == 0:
+                data['tool_choice'] = self.tool_choice
+            upstream = Request('llm', data)
             async for event in self.provider.stream(upstream, context):
                 context.check()
                 if event.kind == 'tool_call':

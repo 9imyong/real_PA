@@ -76,7 +76,13 @@ class ChatHttp:
         if request.data.get('tools'):
             self.capabilities.require({'tools'})
             body['tools'] = request.data['tools']
+            if request.data.get('tool_choice') in {'auto', 'required', 'none'}:
+                body['tool_choice'] = request.data['tool_choice']
         calls = {}
+        if body.get('tool_choice') == 'required':
+            async for event in self._forced_call(body, context):
+                yield event
+            return
         complete = False
         try:
             import httpx
@@ -137,6 +143,46 @@ class ChatHttp:
                     raise InvalidOutput('invalid tool call') from exc
                 yield Event('tool_call',{'id':call['id'],'name':call['name'],'arguments':args})
             context.check()
+            yield Event('completed')
+        except httpx.HTTPError as exc:
+            raise ProviderUnavailable('self-hosted inference request failed') from exc
+
+    async def _forced_call(self, body, context):
+        # llama.cpp may write text before a forced call, and its streaming parser
+        # can lose the call after earlier tool turns. A forced round is short and
+        # never spoken, so read it whole and drop the pre-call text.
+        import httpx
+        body = dict(body, stream=False)
+        try:
+            async with asyncio.timeout(max(0.001,context.deadline - __import__('time').monotonic())):
+                response = await self.client.post(self.url, json=body)
+            context.check()
+            if response.status_code == 400:
+                try:
+                    error = response.json().get('error', {})
+                except (ValueError, AttributeError):
+                    error = {}
+                if isinstance(error, dict) and (error.get('type') == 'exceed_context_size_error' or
+                        error.get('code') == 'context_length_exceeded'):
+                    raise ContextCapacityExceeded('inference context capacity exceeded')
+            response.raise_for_status()
+            try:
+                message = response.json()['choices'][0]['message']
+                calls = message.get('tool_calls') or []
+                events = []
+                for call in calls:
+                    args = json.loads(call['function']['arguments'])
+                    if not isinstance(args, dict) or not call.get('id') or not call['function'].get('name'):
+                        raise ValueError
+                    events.append(Event('tool_call', {'id': call['id'], 'name': call['function']['name'],
+                                                      'arguments': args}))
+            except (ValueError, KeyError, TypeError, IndexError) as exc:
+                raise InvalidOutput('invalid forced tool call') from exc
+            if not events and message.get('content'):
+                events.append(Event('text_delta', {'text': message['content']}))
+            for event in events:
+                context.check()
+                yield event
             yield Event('completed')
         except httpx.HTTPError as exc:
             raise ProviderUnavailable('self-hosted inference request failed') from exc

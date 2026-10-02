@@ -57,8 +57,8 @@ class Route:
 class PrefetchedAnswer:
     """LLM wrapper that replays client-executed lookups as this turn's tool messages."""
 
-    def __init__(self, llm, calls, reply):
-        self.llm, self.calls, self.reply = llm, calls, reply
+    def __init__(self, llm, calls, reply, tools=()):
+        self.llm, self.calls, self.reply, self.tools = llm, calls, reply, list(tools)
         self.capabilities = llm.capabilities
 
     def _results(self):
@@ -81,7 +81,11 @@ class PrefetchedAnswer:
         pending = self._results()
         # Results join the history only once the model accepted the request, so a
         # capacity retry with trimmed history never records them twice.
-        async for event in self.llm.stream(Request('llm', {'messages': messages}, request.local), context):
+        data = {'messages': messages}
+        if self.tools:
+            # Same schemas as other turns (cache prefix), but the answer may not call them.
+            data.update(tools=self.tools, tool_choice='none')
+        async for event in self.llm.stream(Request('llm', data, request.local), context):
             while pending:
                 yield pending.pop(0)
             yield event
@@ -112,10 +116,9 @@ class ClientToolBridge:
                 return Route()
         finally:
             self._routes.pop(request_id, None)
-        if route.prefetched or route.reply is not None:
-            return route
-        if not route.tools or route.choice == 'none':
-            return Route()
+        # Keep the client's tool list even with tool_choice "none": chat templates put
+        # tool schemas at the start of the prompt, so dropping or changing them per
+        # turn invalidates the inference server's prefix cache (measured ~0.7-1.5s).
         route.tools = [copy.deepcopy(self.tools[name]) for name in route.tools]
         return route
 

@@ -135,7 +135,7 @@ class DialogueSession:
         route = await self.client_tools.route(local['request_id'], user_message['content'], emit)
         if route.prefetched or route.reply is not None:
             calls = [dict(item, id=f'pre_{context.turn_id}_{index}') for index, item in enumerate(route.prefetched, 1)]
-            return PrefetchedAnswer(self.llm, calls, route.reply)
+            return PrefetchedAnswer(self.llm, calls, route.reply, route.tools)
         if not route.tools:
             return self.llm
         from .tool_loop import ToolLoop

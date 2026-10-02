@@ -151,6 +151,8 @@
 - `prefetched`: 클라이언트가 이미 실행한 조회 최대 4개(`name`·`arguments`·`result` object, 결과 65536byte 이하). 이번 턴 도구 메시지로 넣고 도구 없이 답변만 생성([ADR-0009](../decisions/ADR-0009-strong-signal-prefetch.md))
 - `reply`: 공백 아닌 500자 이하 고정 문장. LLM 호출 없이 그대로 출력·음성 합성(조회 실패 안내 등 fail-closed). `prefetched`와 함께면 결과도 기록에 남김
 - `prefetched`·`reply`가 형식에 맞지 않으면 route 전체를 도구 없음으로 처리
+- `tools`는 `tool_choice: none`이어도 그대로 LLM 요청에 포함, `prefetched` 턴도 같은 도구와 `none` 전송. chat template이 도구 정의를 프롬프트 앞부분에 넣어 턴마다 바뀌면 추론 서버의 prefix 캐시가 무효화됨(실측: 같은 집합 22ms, 변경 시 0.65~0.8초, 긴 음성 세션 약 1.5초)
+- 클라이언트는 매 턴 같은 도구 정의를 같은 순서로 보내고 라우팅은 `tool_choice`로 표현
 - `required`는 첫 LLM 라운드에만 적용, 결과 수신 후 라운드는 자유 응답
 - `required` 라운드는 비스트리밍·최대 96 token 요청, 호출 전 텍스트는 발화하지 않고 폐기(llama.cpp 스트리밍 파서의 호출 유실 회피)
 - 강제 라운드에 호출이 없거나 잘린 호출이면 그 출력은 버리고 `tool_choice` 없이 스트리밍 답변으로 전환(실측: 거절 시 7.8초 지연 방지)

@@ -26,7 +26,7 @@ class ToolLLM:
     async def stream(self, request, context):
         self.requests.append(request.data)
         tools = request.data.get('tools')
-        if tools and request.data['messages'][-1]['role'] != 'tool':
+        if tools and request.data.get('tool_choice') != 'none' and request.data['messages'][-1]['role'] != 'tool':
             yield Event('tool_call', {'name': tools[0]['function']['name'], 'arguments': {}})
         else:
             last = request.data['messages'][-1]
@@ -190,6 +190,29 @@ class ClientToolTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((await socket.wait_type('text_delta'))['data']['text'], '지금 날씨 정보를 확인하지 못했어요.')
             await socket.wait_type('turn_done')
             self.assertEqual(llm.requests, [])  # fail-closed: the model never answers from memory
+        finally:
+            await self.close(task)
+
+    async def test_tool_schemas_stay_identical_across_none_auto_and_prefetched_turns(self):
+        llm = ToolLLM()
+        socket, task = await self.connect(self.providers(llm), route=True, tools=[WEATHER, YOUTUBE])
+        both = ['get_weather', 'search_youtube']
+        routes = [{'tools': both, 'tool_choice': 'none'},
+                  {'tools': both, 'tool_choice': 'none',
+                   'prefetched': [{'name': 'get_weather', 'arguments': {}, 'result': {'sky': 'clear'}}]},
+                  {'tools': both, 'tool_choice': 'none'}]
+        try:
+            for text, route in zip(['안녕', '날씨', '고마워'], routes):
+                self.say(socket, text)
+                request = await socket.wait_type('route_request')
+                socket.input.put_nowait(json.dumps({'type': 'route', 'request_id': request['data']['request_id'], **route}))
+                done = await socket.wait_type('turn_done')
+                socket.input.put_nowait(json.dumps({'type': 'text_ack', 'generation_id': done['generation_id']}))
+            # Prefix cache: every request carries byte-identical schemas, none forbids calls.
+            self.assertEqual(len(llm.requests), 3)
+            self.assertEqual({json.dumps(r['tools'], ensure_ascii=False) for r in llm.requests},
+                             {json.dumps([WEATHER, YOUTUBE], ensure_ascii=False)})
+            self.assertEqual([r['tool_choice'] for r in llm.requests], ['none', 'none', 'none'])
         finally:
             await self.close(task)
 

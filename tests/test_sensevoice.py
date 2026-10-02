@@ -50,7 +50,7 @@ class SenseVoiceTests(unittest.IsolatedAsyncioTestCase):
     async def test_partial_interval_and_final_are_distinct_and_reset_drops_audio(self):
         model = provider()
         context = Context('s', 1, 1)
-        frame = b'\1\0' * 1600
+        frame = b'\0\1\0\xff' * 800
         async def events(final=False):
             return [e async for e in model.stream(Request('stt', {'pcm': frame, 'final': final}), context)]
         self.assertEqual([e.kind for e in await events()], ['completed'])
@@ -63,6 +63,23 @@ class SenseVoiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('s', model.sessions)
         await model.close()
         self.assertIsNone(model.engine)
+
+    async def test_near_silence_is_not_decoded_and_real_short_word_is_preserved(self):
+        import numpy as np
+        model = provider()
+        async def final(pcm):
+            return [e async for e in model.stream(Request('stt', {'pcm': pcm, 'final': True}), Context('s', 1, 1))]
+        for pcm in (b'\0\0' * 3200, b'\x10\0' * 3200,
+                    np.random.default_rng(1).normal(0, 15, 3200).astype('<i2').tobytes()):
+            result = await final(pcm)
+            self.assertEqual(result[0].data['text'], '')
+            self.assertNotIn('s', model.sessions)
+        self.assertEqual(model.engine.decodes, 0)
+        model.engine.create_stream = lambda: SimpleNamespace(
+            accept_waveform=lambda rate, samples: None, result=SimpleNamespace(text='그.'))
+        pcm = (np.sin(np.arange(3200) * .1) * 256).astype('<i2').tobytes()
+        self.assertEqual((await final(pcm))[0].data['text'], '그.')
+        self.assertEqual(model.engine.decodes, 1)
 
     async def test_limits_and_cancellation_do_not_emit_transcripts(self):
         model = provider()

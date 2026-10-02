@@ -10,13 +10,17 @@ class SenseVoiceProvider:
         self.config = config
         if config.role != 'stt' or 'buffered_partial' not in config.capabilities.features:
             raise ConfigurationError('SenseVoice requires an explicit buffered_partial STT profile')
-        if config.options.keys() - {'num_threads', 'partial_seconds', 'max_seconds'}:
+        if config.options.keys() - {'num_threads', 'partial_seconds', 'max_seconds', 'min_signal_rms'}:
             raise ConfigurationError('unknown SenseVoice option')
         threads = config.options.get('num_threads', 2)
         if type(threads) is not int or not 1 <= threads <= 32:
             raise ConfigurationError('SenseVoice num_threads must be between 1 and 32')
         self.interval = config.options.get('partial_seconds', 1.0)
         self.maximum = config.options.get('max_seconds', 22.0)
+        self.min_signal_rms = config.options.get('min_signal_rms', .001)
+        if (type(self.min_signal_rms) not in (int, float) or
+                not math.isfinite(self.min_signal_rms) or not 0 <= self.min_signal_rms <= .05):
+            raise ConfigurationError('min_signal_rms must be finite and between 0 and .05')
         for value in (self.interval, self.maximum):
             if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
                 raise ConfigurationError('invalid SenseVoice buffer interval')
@@ -63,12 +67,17 @@ class SenseVoiceProvider:
         context.check()
         text = ''
         if state[0]:
-            stream = self.engine.create_stream()
             samples = np.frombuffer(state[0], dtype='<i2').astype(np.float32) / 32768
-            stream.accept_waveform(16000, samples)
-            self.engine.decode_stream(stream)
-            context.check()
-            text = stream.result.text
+            # Test local 100ms AC energy, so trailing silence cannot dilute a
+            # quiet utterance. This rejects near-silence, not specific words.
+            peak_rms = max(float(np.sqrt(np.mean((block - block.mean()) ** 2)))
+                           for block in (samples[i:i + 1600] for i in range(0, len(samples), 1600)))
+            if self.min_signal_rms == 0 or peak_rms >= self.min_signal_rms:
+                stream = self.engine.create_stream()
+                stream.accept_waveform(16000, samples)
+                self.engine.decode_stream(stream)
+                context.check()
+                text = stream.result.text
         state[1] = len(state[0])
         if final:
             self.sessions.pop(context.session_id, None)

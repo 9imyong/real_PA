@@ -1,7 +1,7 @@
 ---
 id: ADR-0008
 title: 클라이언트 라우팅·클라이언트 실행 도구
-status: 제안됨
+status: 승인됨
 date: 2026-10-02
 decision_makers: [프로젝트 소유자]
 related_requirements: [REQ-API-001, REQ-LEMMY-001]
@@ -49,3 +49,5 @@ superseded_by: null
 ### 후속 작업
 
 - [T009](../tasks/active/TASK-20261002-009.md) 구현·실제 8B 검증 후 상태 확정
+- 2026-10-03 승인: Lemmy P4-A2(40턴)에서 필요 도구 16/16, 불필요 도구 실행 0/22. 라우터는 Lemmy 규칙 기반(강한 신호 1개만 required), Laya 기본 OFF
+- 남은 최적화: required 비스트리밍 강제 라운드 약 +140ms

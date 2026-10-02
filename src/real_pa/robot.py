@@ -2,6 +2,7 @@
 import asyncio
 import contextlib
 import io
+import time
 import wave
 from collections import deque
 from .contracts import Context, Event, Request, ResourceExhausted
@@ -15,6 +16,7 @@ class RobotRuntime:
         self.providers = providers
         self.input = asyncio.Queue(maxsize=input_capacity)
         self.awake = False
+        self.speech_ended_at = None
         self.sequence = 0
         self.stt_sequence = 0
         self.speaking = False
@@ -122,6 +124,7 @@ class RobotRuntime:
                 elif event.kind == 'speech_ended':
                     self.speaking = False
                     final = True
+                    self.speech_ended_at = time.monotonic()
             if epoch != self.input_epoch:
                 continue
             if self.discarding_speech:
@@ -187,6 +190,11 @@ class RobotRuntime:
                     self.transcript_segments.clear()
                     # Control metadata belongs to this controller, not STT.
                     final_data = {key: value for key, value in event.data.items() if key != 'control'}
+                    if self.speech_ended_at is not None:
+                        # VAD endpoint → final transcript (STT finalisation). Excludes the
+                        # VAD's own trailing-silence hangover before it declared the end.
+                        final_data['endpoint_ms'] = round((time.monotonic() - self.speech_ended_at) * 1000)
+                        self.speech_ended_at = None
                     event = Event(event.kind, dict(final_data, text=text, input_id=self.input_id))
                     control = utterance_control(text)
                     if control == 'interrupt':

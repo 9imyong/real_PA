@@ -67,7 +67,7 @@
 | request_started | data.request_id·generation_id | 현재 발화 식별자 |
 | interrupted | generation_id | 기존 playback 즉시 flush, 이전 generation ack 금지 |
 | transcript_partial | data.text·generation_id | 부분 전사, 업무 쓰기 실행 근거로 사용 금지 |
-| transcript_final | data.text·generation_id | 최종 전사 |
+| transcript_final | data.text·generation_id·endpoint_ms | 최종 전사. endpoint_ms는 VAD 종료 판정부터 최종 전사까지(ms), VAD 무음 대기 시간 제외 |
 | text_delta | data.text·generation_id | 답변 자막 누적 |
 | audio_chunk | data.pcm·sample_rate·chunk_id·generation_id | pcm은 `{"$pcm16":"base64"}` |
 | completed | generation_id | LLM 생성 완료, 재생 완료를 뜻하지 않음 |

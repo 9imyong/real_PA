@@ -48,6 +48,7 @@
 - handshake: 10초·최대 52096자(JSON escape 포함), ui_started는 boolean만 허용
 - system_prompt: 선택, 공백 아닌 문자열·최대 8000자, 연결 동안 모든 LLM 요청의 첫 system 메시지·문맥 축소 대상 제외
 - chat_http 설정 system_prompt와 함께 쓰면 운영자 지침 뒤에 연결 지침을 이어 하나의 system 메시지로 전송
+- 운영자 지침은 정체성 없는 규칙 한정, 이름·말투·페르소나는 연결 지침(클라이언트) 소유
 - Lemmy는 서버에서 조합한 레미 지침만 전달, 브라우저 start의 system_prompt는 upstream 미전달
 - 이후 단일 메시지: 최대 65536byte/자, 입력 큐 초과 시 세션 실패
 - 브라우저: 시작 gesture/마이크 권한·echoCancellation 활성 설정 필요

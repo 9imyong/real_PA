@@ -2,6 +2,10 @@
 
 ## 출시되지 않음
 
+### 변경: 중립 추론 계층
+
+- 로컬 설정 생성기의 기본 `real-PA` 정체성 system prompt 제거, persona는 클라이언트 연결 지침 소유
+
 ### 추가: 클라이언트 라우팅 도구
 
 - start `route`·`tools`, 턴별 `route_request`/`route`와 `tool_call`/`tool_output`으로 클라이언트가 도구 선택·실행

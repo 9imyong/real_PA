@@ -36,6 +36,7 @@ last_reviewed: 2026-10-02
 - 대화 API는 항상 토큰 없이 실행, 키 입력·인증 모드 옵션 제거. Origin/상한 및 worker·robot·Lemmy 업무 인증 유지
 - 원시 음성 기본 미저장, 접속 키·개인 발화의 진단 로그 기록 금지
 - 연결 단위 system_prompt 선택 제공, Lemmy 페르소나 재사용. 세션 지침은 진단 로그 기록 금지
+- real-PA 자체 정체성·페르소나 없음, 최종 persona/system instruction은 클라이언트(Lemmy) 소유
 - 실제 물리 재생/AEC·Ubuntu 26·회사 배포는 fixture 시험과 구분
 
 ## 추적

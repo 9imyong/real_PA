@@ -34,12 +34,13 @@ GitHub CI는 마크다운 형식과 내부 링크 검사 수행.
 
 - 로컬 LLM 선택: `prepare-local-config.py --llm-model <기존 GGUF 경로> --output-dir <새 설정 폴더>`, 상대 경로는 `--models-root` 기준·절대 경로 허용
 - 서버 model alias는 `--llm-model-id <이름>`으로 지정, 생략 시 GGUF 파일명 사용. 선택 파일의 SHA256은 manifest에 기록
-- 생성 설정의 출력 한도 기본 512 token, `--llm-max-tokens`로 조정. 짧은 일반 대화와 완결된 설명을 요청하는 기본 system prompt 적용, `--llm-system-prompt`로 교체
+- 생성 설정의 출력 한도 기본 512 token, `--llm-max-tokens`로 조정. 기본 system prompt 없음, `--llm-system-prompt`는 정체성 없는 운영 규칙에만 사용
 - GPU 실행기의 context 기본 8192 token, `REAL_PA_LLM_CONTEXT`로 512–32768 범위 선택. 실제 모델 지원 길이와 GPU 메모리 확인 필요
 - 별도 설정 생성 후 `check-config --profile api`와 실제 서버/모델 시험 필요, alias 정적 검사는 실제 다른 모델의 한국어 품질·교체 성공 증거 제외
 
 - `chat_http` adapter 생성 시 `max_tokens`는 양의 정수, `temperature`는 유한한 0 이상 수, `enable_thinking`은 boolean으로 검증
 - `system_prompt`는 operator 설정의 비어 있지 않은 4000자 이하 문자열, 각 요청의 첫 system message로 삽입. 세션 기록 변경·모델별 코어 분기 없음
+- real-PA는 정체성 없는 추론·도구 오케스트레이션 계층. 이름·말투·페르소나는 클라이언트 start의 `system_prompt` 소유, operator 설정에 정체성 기술 금지
 - 설정 변경은 API 재시작 후 새 세션에 적용, 잘못된 기존 응답이 쌓인 대화는 재연결 필요. 모델 context와 세션 기록 상한에 따른 오래된 대화 삭제 가능
 - 순차 한국어 진단: `scripts/llm-quality-smoke.py --config <worker.toml> --review`, 합성 입력만 사용·artifact에는 길이/종료 사유/회상 지표만 저장. 사실 정확도는 답변의 별도 검토 필요
 - 현재 로컬 검증 설정: ignored `config/local/qwen3-8b/worker.toml`, 공식 Qwen3-8B-Q4_K_M·SenseVoice·Supertonic. 모델 준비 후 `bash scripts/start-local-llm.sh artifacts/models/qwen3-8b/Qwen3-8B-Q4_K_M.gguf`, `.venv/bin/python scripts/start-local-api.py --config config/local/qwen3-8b/worker.toml` 순서

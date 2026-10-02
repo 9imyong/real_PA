@@ -364,3 +364,4 @@ LLM tool calling 없는 모델은 일반 대화 전용으로 별도 프로필 �
 
 - start의 선택적 system_prompt를 DialogueSession이 보관, 매 LLM 요청 앞에 system 메시지로 추가
 - 문맥 용량 초과 시 대화 기록만 축소, 연결 지침 유지. Lemmy가 레미 페르소나를 서버에서 조합해 전달
+- real-PA는 중립 추론·도구 오케스트레이션 계층, 정체성 기본 지침 없음. operator system_prompt는 정체성 없는 운영 규칙 한정

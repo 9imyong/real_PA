@@ -56,7 +56,7 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
                 while providers['vad'].frames != 8:
                     await asyncio.sleep(.001)
             self.assertEqual(providers['stt'].frames, 0)
-            socket.input.put_nowait(json.dumps({'type': 'interrupt'}))
+            socket.input.put_nowait(json.dumps({'type': 'text', 'text': '그만.'}))
             await socket.wait_type('interrupted')
             socket.input.put_nowait(json.dumps({'type': 'close'}))
             await asyncio.wait_for(task, 2)

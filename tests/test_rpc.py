@@ -5,7 +5,7 @@ from pathlib import Path
 
 from real_pa.adapters.rpc import InferenceGateway, RemoteProvider, encode, decode
 from real_pa.config import ProviderConfig
-from real_pa.contracts import Context, Request, Event
+from real_pa.contracts import Context, Request, Event, ContextCapacityExceeded
 from test_runtime import FixtureProvider
 
 try:
@@ -17,6 +17,20 @@ except ImportError:
 
 @unittest.skipIf(serve is None,'websockets dependency unavailable')
 class RpcTests(unittest.IsolatedAsyncioTestCase):
+    async def test_context_capacity_error_survives_rpc(self):
+        async def rejected(request, context):
+            raise ContextCapacityExceeded()
+            yield Event('completed')
+        self.fixture.stream = rejected
+        remote = RemoteProvider(self.config)
+        await remote.load()
+        try:
+            with self.assertRaises(ContextCapacityExceeded):
+                async for _ in remote.stream(Request('llm', {'messages': []}), Context('s', 1, 1)):
+                    self.fail('rejected request produced output')
+        finally:
+            await remote.close()
+
     async def asyncSetUp(self):
         self.token = 'test-token-long-enough'
         os.environ['REAL_PA_TEST_TOKEN'] = self.token

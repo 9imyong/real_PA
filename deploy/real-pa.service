@@ -13,6 +13,7 @@ ExecStart=/opt/real-pa/.venv/bin/real-pa api /etc/real-pa/worker.toml --host 127
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=90
+KillSignal=SIGINT
 NoNewPrivileges=true
 UMask=0077
 

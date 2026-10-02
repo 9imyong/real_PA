@@ -4,7 +4,7 @@ import asyncio
 import contextlib
 import json
 import uuid
-from .contracts import Context, Event, Request, ProviderError, ResourceExhausted
+from .contracts import Context, Event, Request, ProviderError, ResourceExhausted, ContextCapacityExceeded
 
 class DialogueSession:
     def __init__(self, session_id, llm, tts, *, timeout=30.0, max_output=32,
@@ -23,6 +23,8 @@ class DialogueSession:
         self.max_history = max_history
         self.pending_audio = {}
         self.heard = []
+        self.pending_text = ''
+        self.displayed_text = ''
         self.chunk_id = 0
         self.control = asyncio.Lock()
         self.ack_event = asyncio.Event()
@@ -38,7 +40,8 @@ class DialogueSession:
             if len(self.retired_tasks) >= 8:
                 raise ResourceExhausted('too many pending cancellations')
             self.turn += 1
-            self.history.append({'role':'user','content':text.strip()})
+            user_message = {'role':'user','content':text.strip()}
+            self.history.append(user_message)
             self.history = self.history[-self.max_history:]
             # A cutoff must not leave a tool result without its assistant call.
             while self.history and self.history[0]['role'] == 'tool':
@@ -46,7 +49,7 @@ class DialogueSession:
             self.context = Context(self.session_id,self.turn,self.generation,self.timeout)
             local = dict(metadata or {})
             local.setdefault('request_id', str(uuid.uuid4()))
-            self.task = asyncio.create_task(self._generate(self.context, local))
+            self.task = asyncio.create_task(self._generate(self.context, local, user_message))
 
     async def interrupt(self):
         async with self.control:
@@ -74,9 +77,10 @@ class DialogueSession:
             # Deliver cancellation, but don't block capture on native inference.
             await asyncio.sleep(0)
         # Commit only audio that the playback sink acknowledged in full.
-        if self.heard:
-            self.history.append({'role':'assistant','content':''.join(self.heard)})
+        if self.heard or self.displayed_text:
+            self.history.append({'role':'assistant','content':''.join(self.heard) + self.displayed_text})
         self.heard.clear()
+        self.pending_text = self.displayed_text = ''
         self.pending_audio.clear()
 
     def acknowledge(self, generation, chunk_id):
@@ -105,6 +109,13 @@ class DialogueSession:
         if context.generation_id != self.generation:
             raise asyncio.CancelledError
 
+    def acknowledge_text(self, generation):
+        if generation != self.generation or not self.pending_text or self.closed:
+            return False
+        self.displayed_text = self.pending_text
+        self.pending_text = ''
+        return True
+
     async def _audio_slot(self, context):
         context.check()
         while len(self.pending_audio) >= self.max_pending_audio:
@@ -112,8 +123,39 @@ class DialogueSession:
             await self.ack_event.wait()
             context.check()
 
-    async def _generate(self, context, local):
+    async def _llm_events(self, context, local):
+        # Fit by whole oldest turns only after an explicit capacity rejection.
+        # Keep the original history until the reduced request is accepted.
+        original = list(self.history)
+        messages = list(original)
+        while True:
+            context.check()
+            emitted = False
+            try:
+                async for event in self.llm.stream(Request('llm', {'messages': messages}, local), context):
+                    context.check()
+                    if not emitted and len(messages) < len(original):
+                        removed = len(original) - len(messages)
+                        del self.history[:removed]
+                        yield Event('context_trimmed', {'removed_messages': removed})
+                    emitted = True
+                    yield event
+                return
+            except ContextCapacityExceeded:
+                context.check()
+                if emitted:
+                    raise
+                cutoff = next((index for index, message in enumerate(messages)
+                               if index > 0 and message.get('role') == 'user'), None)
+                if cutoff is None:
+                    raise
+                messages = messages[cutoff:]
+
+    async def _generate(self, context, local, user_message):
         phrases = asyncio.Queue(maxsize=8)
+        output_audio = local.get('output_audio', True)
+        text_response = ''
+        produced_output = False
         async def synthesize():
             while True:
                 phrase = await phrases.get()
@@ -140,10 +182,12 @@ class DialogueSession:
             async with asyncio.timeout(self.timeout):
                 await self._emit(context, Event('request_started', {'request_id': local['request_id']}))
                 async with asyncio.TaskGroup() as group:
-                    speaker = group.create_task(synthesize())
+                    speaker = group.create_task(synthesize()) if output_audio else None
                     buffer = ''
                     completed = False
-                    async for event in self.llm.stream(Request('llm',{'messages':list(self.history)},local),context):
+                    async for event in self._llm_events(context, local):
+                        if event.kind != 'context_trimmed':
+                            produced_output = True
                         await self._emit(context,event)
                         if event.kind == 'tool_result':
                             call, result = event.data['call'], event.data['result']
@@ -153,6 +197,11 @@ class DialogueSession:
                                         'name': call['name'], 'arguments': json.dumps(call['arguments'], ensure_ascii=False)}}]},
                                 {'role': 'tool', 'tool_call_id': call['id'], 'content': json.dumps(result, ensure_ascii=False)}])
                         if event.kind == 'text_delta':
+                            if not output_audio:
+                                text_response += event.data['text']
+                                if len(text_response) > 16000:
+                                    raise ResourceExhausted('text response too large')
+                                continue
                             buffer += event.data['text']
                             if len(buffer) >= 160 or buffer.endswith(('.', '?', '!', '\n')):
                                 if buffer.strip():
@@ -162,19 +211,30 @@ class DialogueSession:
                             completed = True
                     if not completed:
                         raise ProviderError('missing completion')
-                    if buffer.strip():
-                        await phrases.put(buffer)
-                    await phrases.put(None)
-                    await speaker
+                    if output_audio:
+                        if buffer.strip():
+                            await phrases.put(buffer)
+                        await phrases.put(None)
+                        await speaker
+                    else:
+                        context.check()
+                        self.pending_text = text_response
                     await self._emit(context,Event('turn_done'))
         except asyncio.CancelledError:
             raise
-        except Exception:
+        except Exception as error:
             if context.generation_id == self.generation and not self.closed:
                 while not self.output.empty():
                     self.output.get_nowait()
                 self.pending_audio.clear()
-                self.output.put_nowait((self.generation,Event('error',{'code':'turn_failed'})))
+                self.pending_text = ''
+                capacity = isinstance(error, ContextCapacityExceeded) or (
+                    isinstance(error, BaseExceptionGroup) and error.subgroup(ContextCapacityExceeded) is not None)
+                if capacity and not produced_output and self.history and self.history[-1] is user_message:
+                    self.history.pop()
+                    self.output.put_nowait((self.generation, Event('input_rejected', {'code': 'context_capacity_exceeded'})))
+                else:
+                    self.output.put_nowait((self.generation,Event('error',{'code':'turn_failed'})))
 
     async def next_event(self):
         while True:

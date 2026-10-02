@@ -14,7 +14,12 @@ def doctor():
         result = subprocess.run(['nvidia-smi','--query-gpu=name,memory.total',
                                  '--format=csv,noheader'],capture_output=True,text=True,timeout=10)
         gpu = result.returncode == 0
-    return {'gpu_accessible':gpu,'alsa_devices':pathlib.Path('/dev/snd').exists(),
+    # A timer/control node alone does not provide PCM capture or playback.
+    sound_nodes = pathlib.Path('/dev/snd')
+    capture = any(sound_nodes.glob('pcm*C*D*c'))
+    playback = any(sound_nodes.glob('pcm*C*D*p'))
+    return {'gpu_accessible':gpu,'alsa_devices':capture or playback,
+            'alsa_pcm_capture':capture, 'alsa_pcm_playback':playback,
             'modules':{name:importlib.util.find_spec(name) is not None
                        for name in ['httpx','websockets','sherpa_onnx','sounddevice']}}
 

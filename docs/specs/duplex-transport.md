@@ -9,6 +9,8 @@
 ## 인증과 소유권
 
 - standalone API: start의 접속 token 확인, 브라우저 Origin allowlist, 기본 최대 4개 연결
+- standalone 연결: 입출력 메시지 없는 300초 이후 close code 4000·유휴 안내·세션 회수, capture PCM/응답 출력 중 연결 유지
+- 해당 상한은 전송 유휴 조건, 마이크를 켠 사용자 침묵의 의미상 종료와 구분. RobotGateway/인증된 Lemmy 경로 기본 종료 정책 변경 제외
 - 접속 credential은 REAL_PA_API_TOKEN 환경 소유, 브라우저 입력은 임시 메모리만 사용
 - 원격 접속은 TLS proxy·wss, 미래 Lemmy 서버 클라이언트도 같은 start 인증 사용
 - Lemmy 개인 도구 권한은 API 접속 키만으로 부여하지 않음, 실제 업무 권한 연동은 후속 단계
@@ -16,8 +18,15 @@
 - 회사 worker credential: Backend 환경 소유, 브라우저 전달 금지
 - 모델 설정: 서버에 native/self-hosted 또는 company_rpc 역할 주입, manifest·capability 검증
 - 브라우저·미래 Lemmy는 모델 engine·weight·worker credential을 알 필요 없음
+- 브라우저 captureDevice는 open({context})에서 MediaStream·echoCancellation:true 반환, close(stream)에서 장치/처리기 자원 동기 정리. open 실패의 부분 자원은 adapter 책임
+- controller는 미지원 AEC 결과 거절·늦은 open 결과 정리·마이크 off/종료 시 close 호출, cleanup 실패에도 track 정지
+- 이 경계는 브라우저 입력 교체용, software AEC의 render/capture PCM·지연 동기화·실기기 품질 계약 인수 대체 불가
 
 ## Client → robot
+
+- input_id: 선택적 0–9007199254740991 정수, 새 브라우저는 마이크 전환마다 증가. 생략한 기존 client는 현재 값 유지
+- 서버 transcript_partial/final의 data.input_id는 해당 capture 식별자, 브라우저는 현재 값과 다른 전사 거절
+- 식별자 없는 기존 서버 결과는 하위 호환으로 수신, 빠른 입력 전환 격리는 새 서버/client 조합의 계약
 
 | 메시지 | 형식 | 동작 |
 | --- | --- | --- |
@@ -25,10 +34,16 @@
 | PCM | binary 3200byte | PCM16 little-endian mono 16000Hz, 정확히 100ms |
 | listen | `{"type":"listen"}` | 이전 생성 중단 후 호출어 없이 듣기 활성화 |
 | interrupt | `{"type":"interrupt"}` | generation 변경·출력 폐기, 입력은 지속 |
-| input_reset | `{"type":"input_reset"}` | 입력 epoch 변경·STT/VAD 상태 정리, 연결/출력 유지 |
+| input_reset | `{"type":"input_reset","input_id":1}` | 입력 epoch 변경·STT/VAD 상태 정리, 연결/출력 유지 |
 | text | `{"type":"text","text":"문장"}` | 최종 텍스트 발화, 최대 4000자·선택적 request_id |
+| text_ack | generation_id 정수 | 완료한 텍스트 전용 응답의 UI 표시 확인, 현재 generation·최초 확인만 수락 |
 | playback_ack | generation_id·chunk_id 정수 | 현재 generation의 다음 chunk 재생 완료 확인 |
 | close | `{"type":"close"}` | 입력·생성·재생 종료 |
+
+- text의 선택적 output_audio boolean 기본 true, false는 명시적 텍스트 전용 응답·TTS 미호출
+- 텍스트 전용 답변은 최대 16000자, turn_done 이후 text_ack로 확인한 내용만 후속 문맥에 반영. 음성 heard 기록과 표시 확인 구분
+- 출력 clock 정지 시 기존 생성 취소·미재생 audio ACK 금지·마이크/음성 출력 off·오류 안내, 같은 연결의 텍스트 요청 유지
+- 음성 입출력은 출력 장치 확인 후 사용자의 명시적 새 연결로 복구, 외부 AI 전환/자동 발화 재전송 없음
 
 - handshake: 10초·최대 4096자, ui_started는 boolean만 허용
 - 이후 단일 메시지: 최대 65536byte/자, 입력 큐 초과 시 세션 실패
@@ -59,12 +74,27 @@
 - 새 generation보다 낮은 오디오·자막은 폐기, local interrupt 전송부터 서버 확인 전까지 늦은 오디오 재생 금지
 - 음성 응답 중단은 새 generation의 `transcript_final`에 `data.control=interrupt` 전달, 자막 확정·listening 유지·LLM 요청 생성 없음
 - control은 대화 제어기가 확정한 동작 표시, 클라이언트의 한국어 문자열 비교로 중단 정책 복제 금지
+- 전체 발화 `그만`의 중단과 음성 `대화 끝`/`종료`의 종료 판단에서 앞뒤 공백·끝 구두점 `. ! ? 。 ！ ？ …` 제거, 표시 전사 원문 유지
+- 명령 앞뒤의 추가 단어·문장과 내부 구두점은 제거 제외, 명령에 관한 질문의 오중단 방지
+- 브라우저 마이크 전환·텍스트 입력·연결 종료 시 미확정 부분 자막 제거, 마이크 off 동안 부분 전사 표시 제외
+- 빈 부분 전사는 이전 부분 자막 제거, 최종 대화 기록과 응답 재생 상태 변경 제외
 - ack: WebAudio onended 근거, 실제 스피커 소리/물리적 재생 시각 증명 아님
 - 기억: 현재 연결에서 완전히 ack한 구절만 assistant 문맥으로 반영, 부분 재생 구절은 제외
 - 현재 standalone 대화는 업무 도구 미광고·미실행, 선택적 ToolLoop와 Lemmy bridge는 후속 자산
 - 오류·종료 후 자동 발화 재전송 금지, 신규 연결은 새 세션
 
 ## 실패와 전환
+
+- 추론 서버의 명시적 문맥 한도 거절: 응답 생성 전의 최신 user 입력만 문맥에서 제거·`input_rejected/context_capacity_exceeded` 전달, 이전 대화 보존·다음 입력 허용
+- 해당 거절은 ChatHttp/company_rpc 공통 오류로 전달, 일반 HTTP 장애와 구분. 이미 출력/도구 결과가 있는 턴의 기록 자동 삭제 제외
+- 출력/도구 이벤트 전 명시적 문맥 한도 거절 시 가장 오래된 user 턴 단위로 제한적으로 요청 축소·재시도, 기존 deadline 유지·최신 입력 보존
+- 축소 요청이 수락된 뒤에만 이전 문맥 제외 확정·`context_trimmed` 안내, 최신 입력만으로도 거절되면 이전 문맥 보존. 자동 요약·출력/도구 이벤트 이후 재시도 제외
+
+- 브라우저 microphone track 종료·capture 처리 오류 시 input_reset·마이크 off·자원 정리·안내, 텍스트 연결과 기존 출력 유지
+- 입력의 epoch가 바뀐 뒤 도착한 이전 장치 종료 이벤트는 현재 마이크 상태 변경 제외
+
+- 브라우저 미완료 재생 중 오디오 시계가 3초간 정지하면 장치 오류 안내·미재생 chunk ACK 금지·음성 입출력 정리, 동일 연결의 텍스트 모드 유지
+- 재생 완료·끼어들기·연결 종료 시 시계 감시 timer 해제, 자동 재생 성공/재연결 주장 제외
 
 - 1008: 접속 키·start 형식 불충족
 - 1013: 동시 세션 상한, 기존 세션은 유지

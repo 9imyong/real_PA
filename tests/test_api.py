@@ -55,14 +55,33 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(api.active, 1)
 
     @asynccontextmanager
-    async def server(self, *, max_sessions=4):
+    async def server(self, *, max_sessions=4, idle_timeout=300):
         providers = dict(llm=FixtureProvider(), tts=FixtureProvider('tts'),
                          **{r: AudioFixture(r) for r in ['stt', 'vad', 'kws']})
-        api = DuplexAPI(providers, TOKEN, max_sessions=max_sessions)
+        api = DuplexAPI(providers, TOKEN, max_sessions=max_sessions, idle_timeout=idle_timeout)
         async with serve(api.handle, '127.0.0.1', 0, process_request=api.process_request,
                          origins=[None, 'http://allowed.test'], compression=None, max_size=65536) as server:
             port = server.sockets[0].getsockname()[1]
             yield api, f'http://127.0.0.1:{port}', f'ws://127.0.0.1:{port}/v1/realtime'
+
+    async def test_idle_connection_releases_capacity_but_capture_keeps_it_alive(self):
+        async with self.server(max_sessions=1, idle_timeout=.15) as (api, _, url):
+            async with connect(url) as ws:
+                await ws.send(json.dumps({'type': 'start', 'token': TOKEN, 'ui_started': True}))
+                await ws.recv()
+                for _ in range(8):
+                    await ws.send(b'\0\0' * 1600)
+                    await asyncio.sleep(.04)
+                    self.assertEqual(api.active, 1)
+                async with asyncio.timeout(2):
+                    with self.assertRaises(ConnectionClosed):
+                        while True: await ws.recv()
+                self.assertEqual(ws.close_code, 4000)
+            async with asyncio.timeout(2):
+                while api.active: await asyncio.sleep(.01)
+            async with connect(url) as next_ws:
+                await next_ws.send(json.dumps({'type': 'start', 'token': TOKEN}))
+                self.assertEqual(json.loads(await next_ws.recv())['type'], 'session_started')
 
     async def test_browser_and_health_are_served_on_the_api_origin(self):
         async with self.server() as (_, http, _):

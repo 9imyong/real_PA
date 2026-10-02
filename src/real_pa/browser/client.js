@@ -19,6 +19,7 @@ function connected(value) {
 const client = new RealPAClient({
   outputSampleRate: 48000,
   onState: state => {
+    ui('microphone').checked = client.microphone;
     ui('status').textContent = labels[state] || state;
     connected(client.isActive);
     ui('capture-state').textContent = client.isActive && client.microphone ? '마이크 켜짐' : '마이크 꺼짐';
@@ -65,6 +66,7 @@ ui('microphone').onchange = async () => {
   } catch (error) {
     ui('microphone').checked = false;
     await client.setMicrophone(false);
+    ui('capture-state').textContent = '마이크 꺼짐';
     ui('notice').textContent = '마이크 권한과 반향 제거 지원을 확인해 주세요.';
   }
 };

@@ -42,6 +42,9 @@ flowchart LR
 - 양방향의 첫 목표: 지속 입력과 동시 출력, 끼어들기·후속 문맥 처리
 - 동시 발화의 의미·감정·백채널을 통합 학습한 음성 모델과 동등한 품질은 보장 범위 아님
 - real-PA 서버: 세션·추론·취소·streaming 출력 조율, browser client: capture·AEC·playback
+- 출력 clock 장애의 명시적 텍스트 모드: 동일 연결·자체 LLM 유지, TTS 미호출·UI 표시 ACK 문맥 반영, 음성 복구는 사용자 새 연결
+- 브라우저 입력 교체 경계: RealPAClient의 captureDevice.open({context}) → {stream, echoCancellation: true}, close(stream) 주입
+- 기본 BrowserCaptureDevice의 native AEC 지원 확인·실패 정리, controller의 epoch/Worklet/전송 계약 보존. 별도 software AEC 엔진/참조 PCM 동기화·물리 반향 검증 미완료
 - Lemmy: 추후 API 클라이언트, 업무 사용자 인증·권한·데이터·행동 상태 소유
 
 ## 구성 요소
@@ -105,6 +108,10 @@ flowchart LR
 - UI 대표 상태는 활동 집합의 투영, 마이크 실행 여부와 구분
 
 ### 오류와 복구
+
+- 명시적 추론 문맥 한도 거절·출력 전 조건에서 오래된 턴을 순서대로 제외해 요청 재시도, SDK별 오류 분류는 adapter 책임
+- 축소 요청 수락 전 기존 문맥 유지, 수락 후 context_trimmed 안내. 최신 입력 자체의 한도 초과는 해당 입력만 제외
+- 재시도는 기존 deadline·generation 안에서 수행, 텍스트/도구 이벤트 이후 재시도와 업무 행동 자동 재전송 금지
 
 - 큐 용량·시간 상한 설정, 넘친 출력은 조용히 이어 붙이지 않고 해당 generation 중단
 - 입력 손실은 계측·표시 후 발화 재입력 요청, 잘린 오디오로 쓰기 실행 금지
@@ -305,9 +312,11 @@ LLM tool calling 없는 모델은 일반 대화 전용으로 별도 프로필 �
 | --- | --- | --- |
 | `src/real_pa/contracts.py` | 5개 역할 포트, 표준 요청·event·context·오류 | signature 세분화·완전한 형식 검증 후속 |
 | `src/real_pa/config.py`, `registry.py` | 설정·hash·capability·명시적 factory·로드 실패 정리 | 전체 실제 모델 조합 인수 전 |
-| `src/real_pa/adapters/chat_http.py` | 자체 llama.cpp/vLLM 형식 SSE·도구 fragment 정규화 | 현재 Qwen의 도구 품질 미검증 |
+| `src/real_pa/adapters/chat_http.py` | 자체 llama.cpp/vLLM 형식 SSE·도구 fragment 정규화·설정 system prompt 주입 | 현재 Qwen의 도구 품질 미검증 |
 | `src/real_pa/adapters/sherpa.py` | streaming STT·KWS·Silero VAD·Supertonic TTS | CPU native 취소는 실행 종료를 기다리고 출력 폐기 |
 | `src/real_pa/adapters/sensevoice.py` | 명시적 buffered partial·SenseVoice offline STT | 실제 모델/20회 합성 브라우저 통과·한국어 품질/실기기 인수 전 |
+| `src/real_pa/adapters/gptsovits_http.py` | 자체 GPT-SoVITS HTTP의 한국어 raw PCM → 40ms chunk | 전송 fixture 검증, 실제 모델·sample rate 일치·음질 검증 전 |
+| `src/real_pa/adapters/sherpa_vits.py` | 한국어 Mimic3 VITS·22050Hz·40ms PCM·native lifecycle 재사용 | 실제 모델·설치 browser 10턴/합성 음성 2회 통과, 물리 재생/한국어 품질 미검증 |
 | `src/real_pa/adapters/rpc.py` | 회사 inference worker·remote adapter·실제 capability 협상 | WAN 성능·세션 상태 만료 보강 필요 |
 | `src/real_pa/session.py` | 병렬 LLM/TTS·generation 취소·오디오 ack·bounded output | 부분 재생 구절은 보수적으로 기억 제외 |
 | `src/real_pa/robot.py`, `robot_gateway.py` | 지속 VAD·발화 구간 STT·기본 직전 900ms 보존·출력 분리·끼어들기 | standalone은 개발 token, Lemmy route는 쿠키·binding 확인 |

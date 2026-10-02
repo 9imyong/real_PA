@@ -5,6 +5,7 @@ import io
 import wave
 from collections import deque
 from .contracts import Context, Event, Request, ResourceExhausted
+from .speech_controls import utterance_control
 
 
 class RobotRuntime:
@@ -31,11 +32,14 @@ class RobotRuntime:
         self.running = None
         self.closed = False
         self.input_epoch = 0
+        self.input_id = 0
 
-    async def reset_input(self):
+    async def reset_input(self, *, input_id=None):
         if self.closed:
             raise RuntimeError('audio session is closed')
         self.input_epoch += 1
+        if input_id is not None:
+            self.input_id = input_id
         done = asyncio.get_running_loop().create_future()
         try:
             self.input.put_nowait(('reset', self.input_epoch, done))
@@ -152,6 +156,7 @@ class RobotRuntime:
                 if epoch != self.input_epoch:
                     continue
                 if event.kind == 'transcript_partial':
+                    event = Event(event.kind, dict(event.data, input_id=self.input_id))
                     current = Context(self.session.session_id,self.session.turn,self.session.generation,timeout=10)
                     if self.transcript_segments:
                         event = Event(event.kind, dict(event.data,
@@ -176,14 +181,15 @@ class RobotRuntime:
                         current = Context(self.session.session_id, self.session.turn,
                                           self.session.generation, timeout=10)
                         await self.session._emit(current, Event('transcript_partial',
-                            {'text': ' '.join(self.transcript_segments)}))
+                            {'text': ' '.join(self.transcript_segments), 'input_id': self.input_id}))
                         continue
                     text = ' '.join(self.transcript_segments)
                     self.transcript_segments.clear()
                     # Control metadata belongs to this controller, not STT.
                     final_data = {key: value for key, value in event.data.items() if key != 'control'}
-                    event = Event(event.kind, dict(final_data, text=text))
-                    if text == '그만':
+                    event = Event(event.kind, dict(final_data, text=text, input_id=self.input_id))
+                    control = utterance_control(text)
+                    if control == 'interrupt':
                         self.audio_window.clear()
                         await self.session.interrupt()
                         current = Context(self.session.session_id, self.session.turn,
@@ -191,7 +197,7 @@ class RobotRuntime:
                         await self.session._emit(current, Event('transcript_final',
                             dict(event.data, control='interrupt')))
                         continue
-                    if text in {'대화 끝','종료'}:
+                    if control == 'close':
                         await self.session.interrupt()
                         return
                     audio = io.BytesIO()

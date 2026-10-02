@@ -8,7 +8,7 @@ import secrets
 import time
 from urllib.parse import urlsplit
 from ..contracts import (Request, Context, Event, ProviderUnavailable,
-                         ConfigurationError, InvalidOutput)
+                         ConfigurationError, InvalidOutput, ContextCapacityExceeded)
 
 
 def encode(value):
@@ -99,6 +99,8 @@ class RemoteProvider:
                             if raw.get('generation_id') != context.generation_id:
                                 raise InvalidOutput('RPC generation mismatch')
                             if raw.get('type') == 'error':
+                                if raw.get('code') == 'context_capacity_exceeded':
+                                    raise ContextCapacityExceeded('inference context capacity exceeded')
                                 raise ProviderUnavailable('inference worker failed')
                             if raw.get('type') != 'event':
                                 raise InvalidOutput('invalid RPC event')
@@ -205,11 +207,11 @@ class InferenceGateway:
             await work
         except asyncio.CancelledError:
             raise
-        except Exception:
+        except Exception as error:
             if context is not None:
                 try:
                     await ws.send(json.dumps({'type':'error','generation_id':context.generation_id,
-                                               'code':'inference_failed'}))
+                                               'code': 'context_capacity_exceeded' if isinstance(error, ContextCapacityExceeded) else 'inference_failed'}))
                 except Exception:
                     pass
         finally:

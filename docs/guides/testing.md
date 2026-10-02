@@ -1,5 +1,108 @@
 # 테스트 및 인수 검증 안내
 
+## 합성 한국어 왕복 전사 진단
+
+- 실행: `.venv/bin/python scripts/korean-roundtrip-smoke.py --configs config/local/sensevoice/worker.toml config/local/mimic3-generated/worker.toml`
+- 고정 10문장·전체 합성 음성·같은 SenseVoice STT, 공백/문장부호 제외 normalized CER와 정확 일치 수 기록
+- `korean-roundtrip-smoke.json`: Supertonic CER 3.54%·일치 7/10, VITS CER 7.96%·일치 5/10, 빈 전사 없음
+- 작은 합성 표본의 왕복 결과이며 TTS/STT 오류 원인 분리·사람 목소리·청감·일반 품질 인증 아님
+
+## VITS 교체 후 연속 음성 시험
+
+- `mimic3-model-adapter-smoke.json`: 같은 실제 모델의 direct/company_rpc 경로에서 5개 역할 envelope·reset·pre-cancel 통과, 모델 architecture 간 비교 시험 아님
+- `browser-mimic3-continuous-voice.json`: 실제 설치 wheel·Chromium·자체 모델·한국어 Mimic3 VITS TTS, 100회/1445.094초 완료
+- 같은 capture/연결에서 유효 final·응답 완료 100회, 출력 중 끼어들기 1회, 종료 활성 세션 0
+- 합성 입력/무음 출력 조건. 텍스트 문맥 확인은 음성 phase 전 10턴에서 수행
+- API/native RSS 관찰 862684 → 891740KiB(96.6 → 1300.1초), Chromium/GPU 제외·전체 누수 판정 아님
+- 물리 음성/AEC·Ubuntu 26·30분 기준·100턴 문맥 품질·일반 지연 인수와 구분
+
+## 독립 브라우저 인수 현황
+
+- 기준: [REQ-API-001](../requirements/REQ-API-001.md)의 A01–A09, 현재 파일·실행 결과 확인
+- 아래 artifact는 로컬 검증 산출물, 모든 변경 이후 동일 조합 재시험 성공 또는 전체 제품 인수 완료 의미 제외
+
+| 조건 | 확인한 근거 | 남은 범위 |
+| --- | --- | --- |
+| A01 단일 서버 브라우저/API | API asset/health fixture·현재 localhost:18484 실제 실행·인증 세션 열기/종료 | 대상 Ubuntu 26 실행 |
+| A02 텍스트·생성 중 입력 | 실제 Chromium 연속 텍스트·generation 중단, 권한 실패 주입 후 연결 유지 | 사용자 환경 입력/재생 확인 |
+| A03 음성 전환·동시 capture | 실제 Chromium 합성 음성 125회·1880.344초 동일 capture 유지·출력 중 입력, capture 변환 3개 | 실제 장치·물리 30분 연속 음성 capture |
+| A04 중단·늦은 출력 거절 | generation/ack/native 결과 모사 회귀·실제 합성 끼어들기 | 물리 중단 지연 100회·에코 조건 |
+| A05 후속·문맥·회수 | `browser-30-minute-silent-smoke.json` 986회·1801.383초·종료 세션 0, 문맥 검사는 10번째 | 기본 출력 clock 정지·기억 검사 간헐 실패·물리 음성 장시간 |
+| A06 자체 GPU·외부 fallback 제외 | network-none 컨테이너 GPU/API/Chromium의 텍스트 10회·합성 음성 응답 2회·GPU 25/25층 | 실제 물리 오디오를 포함한 네트워크 차단 시험 |
+| A07 기술별 교체 | 실제 direct/RPC 역할 계약·transducer/SenseVoice STT 교체·설정/manifest 검사 | 모든 역할의 다른 실제 모델 2개·실패/품질 재측정 |
+| A08 인증·Origin·TLS | 인증/Origin/세션 상한 fixture·Nginx loopback HTTPS/WSS 실제 10회 | 공인 인증서·회사 배포·WAN·대상 용량 |
+| A09 추후 Lemmy API 사용 경계 | standalone 설치 wheel·Lemmy 저장소 없이 브라우저 실행·공개 전송 계약 | 실제 Lemmy 통합은 사용자 우선순위에 따른 후속 단계 |
+
+- 실제 모델 시험의 제한: 합성 입력·buffer ack·무음 sink·물리 출력 여부를 artifact별로 구분
+- 수치 목표의 제한: 첫 음성/끼어들기 p95·한국어 정확도·AEC 거짓 중단 기준은 아직 인수 미완료
+- 현재 진행: 로컬 브라우저 제공·회귀 검증, 실제 마이크/스피커 접근 가능 여부의 사용자 답변 대기
+
+- `artifacts/offline-env/offline-browser-smoke.json`·`offline-browser-result.json`: 외부 route 없는 동일 network-none 컨테이너의 GPU/API/실제 Chromium·텍스트 10회·문맥·음성 응답 완료 2회·끼어들기 2회·종료 세션 0 통과
+- GPU 25/25층 offload 확인, 합성 voice final 3회 중 응답 완료 사이클 2회·Web Audio 무음 sink 재생 ACK 사용. native 시험의 즉시 buffer ACK와 구분
+- 시작 실패 artifact 2개 보존, llama 라이브러리 경로 보존·공개 host font 리소스/loader 연결 후 성공. 해당 mount는 컨테이너 내부 읽기 전용이며 호스트 변경 없음
+- 브라우저/추론의 외부 AI·인터넷 필수 의존 제거 근거, 물리 음성/AEC·기본 출력 clock 정지 해결·Ubuntu 26/운영 이미지 인증과 구분
+
+- `scripts/offline-voice-smoke.py`: loopback-only interface 확인·외부 route 연결 거절·컨테이너 내부 LLM 실행·native VAD/STT/LLM/TTS 후속 대화 검증
+- `artifacts/offline-env/offline-voice-verbose.json`: Docker `--network none --gpus all`에서 GPU 25/25층 offload·유효 음성 final 1회·응답 완료 2회·audio chunk 861개 buffer ACK 통과
+- 기존 localforge CUDA image(Ubuntu 22.04)·호스트 Python 3.12/stdlib/공개 shared library·설치 wheel packages·모델의 읽기 전용 bind 사용, 호스트 API/GPU 서비스·네트워크 설정 변경 없음
+- 첫 2개 artifact는 GPU 로그 증거 부족으로 failed 보존, 최종 시험은 명시적 verbosity에서 숫자만 추출·원문 로그 미저장
+- UI 시작·합성 음성·즉시 buffer ACK 조건, KWS 모델 load와 실제 호출어 검증 구분. 브라우저·물리 재생/AEC·Ubuntu 26/운영 이미지 인증 제외
+
+- `browser-output-text-recovery.json`: 최신 설치 wheel·실제 모델/Chromium에서 기본 출력 clock 정지 후 음성 off 안내·동일 WebSocket 텍스트 응답 완료·종료 세션 0 확인
+- 출력 장애 후 텍스트 경로의 복구 증거이며 기본 출력 clock 원인 해결·연속 음성/AEC 성공과 구분
+
+- `browser-output-smoke.py --signal tone --chunk-ms 40`: 절차적 440Hz/amplitude .005 입력, 녹음·모델·마이크·소켓 제외
+- `browser-output-tone-chunks.json`의 기본 48kHz는 source 612회 뒤 clock 39.4693/running/output_timeout, 같은 40ms 무음 `browser-output-silent-chunks.json`은 65.019초·1114회 통과
+- `pulseaudio-tone-stream.json`: Chromium 없이 pacat/48kHz/mono/50ms latency·100ms tone frame을 wall clock으로 전송, 527회 뒤 drain 3초 timeout·총 55.706초 실패
+- 현재 OS 출력 경로의 별도 실패 재현이며 정확한 WSLg 원인 확정/실제 청취 검증은 제외. [WSLg의 PulseAudio/RDP 경계](https://github.com/microsoft/wslg#pulse-audio-plugin) 및 [관련 정지 보고](https://github.com/microsoft/wslg/issues/1508)와 실제 동일 원인 여부 미확정
+
+- 44.1kHz 기본 출력 비교 `browser-default-output-44100.json`: 10회 완료 뒤 11번째의 clock 정지·source 32개, sample rate 정합만으로 해결 불가
+- 완료/중단 노드 disconnect 회귀 포함 browser 27개 통과, 기본 48kHz `browser-output-node-cleanup.json` 재시험도 19회 뒤 정지. 노드 정리는 lifecycle 보완이며 clock 근본 원인 해결 증거 아님
+
+- 기본 출력 120초 목표 재현 실패: `browser-default-output-recheck.json` 19회, 진단 추가한 `browser-default-output-diagnostic.json` 21회 뒤 종료
+- 진단 시 모델 stage 오류 0·LLM completed/turn_done 21회, 출력 clock running/currentTime 39.888에서 3003.7ms 정지·source 27개 대기·watchdog 오류 처리 후 source 0/연결 종료
+- WSLg RDPSink 44.1kHz와 브라우저 48kHz 조건, 정지 근본 원인/기본 출력 안정성 미해결. 무음 sink·짧은 성공 시험은 해당 실패 해결 근거 제외
+
+- 첫 음성 chunk 수신 측정: 브라우저 sendText 시각 → 현재 generation의 첫 수락 audio_chunk, 원시 ms·nearest-rank p50/p95 저장
+- `artifacts/browser-audio-receipt-latency.json`: 실제 설치 wheel/로컬 모델/Chromium·145회·240.357초, 수신 지연 p50 204.2ms·p95 392.7ms·종료 세션 0
+- 입력 대부분 고정 인사 요청·첫 10회 문맥 검사·무음 sink 조건, cache/warm-up 효과 분리 없음. 발화 종료→실제 출력 지연·다양한 한국어 품질·끼어들기 100회·물리 목표 인수와 구분
+
+- `artifacts/browser-input-id-tls-smoke.json`: input_id 계약 포함 설치 wheel의 실제 모델/Chromium·Nginx HTTPS/WSS 10회·문맥·합성 음성 완료 2회·끼어들기·종료 세션 0 통과
+- 최신 설치 wheel Python 73개 통과, 빠른 on/off의 늦은 전사 거절은 browser fixture 26개에 포함. 이 일반 회귀가 물리 장치 경합·AEC·공인 인증서 검증을 대신하지 않음
+
+- `artifacts/browser-idle-recovery.json`: 최신 설치 wheel/실제 Chromium·fixture 추론, 0.7초 유휴 상한 주입에서 종료 안내·AudioContext/socket 정리·새 연결 재시작 2회·종료 세션 0 확인
+- 설치 wheel Python 73개 통과, fixture 소켓에서는 PCM 전송 중 유지와 종료 후 연결 용량 회복 확인. 기본 300초 대기·실제 모델/물리 입력 인수와 구분
+
+- 동일 엔진의 실제 LLM 변경: Qwen3.5-0.8B-Q4_0 → 공식 [Qwen3-1.7B-Q8_0](https://huggingface.co/Qwen/Qwen3-1.7B-GGUF), 별도 `config/local/qwen3-1.7b/worker.toml`·manifest로 선택, dialogue/browser 코어 변경 없음
+- 파일 SHA-256 `061b54daade076b5d3362dac252678d17da8c68f07560be70818cace6590cb1a`, revision `90862c4b9d2787eaed51d12237eafdfe7c5f6077`, Apache-2.0 LICENSE·모델 카드·provenance ignored artifact 보존
+- `artifacts/browser-second-llm-smoke.json`: 실제 설치 wheel/Chromium 텍스트 10회·문맥·음성 응답 완료 2회·종료 세션 0 통과, 음성 final 5회·출력 중 끼어들기 4회 관찰
+- 서로 다른 LLM 모델의 같은 엔진 검증이며, 실행 엔진 2개·모든 역할의 실제 모델 2개·한국어 품질 인수와 구분
+
+- `artifacts/browser-continuous-voice-long-smoke.json`: 설치 wheel/실제 모델/Chromium의 동일 capture·연결에서 125회 음성 final 이후 응답 재생 완료, 음성 구간 1880.344초·종료 세션 0
+- VAD 18856프레임·STT 4004프레임·nonempty final 125회·출력 중 끼어들기 1회 확인, 입력 합성·Web Audio 무음 sink 조건
+- 음성 구간은 첫 final 이후부터 측정, 이름 문맥 검사는 선행 텍스트 2번째 수행. 30분 이름 보존·자연 발화 품질·물리 출력/AEC 검증 제외
+- 메모리 관측 `artifacts/browser-continuous-voice-resource-observations.json`: Python API/native audio process RSS 4분 5초부터 29분 55초까지 778936→795248KiB, Chromium/GPU container 제외·메모리 누수 부재 증명 제외
+
+- 출력 단독 진단: `scripts/browser-output-smoke.py --chromium <실행 파일> --duration 65`, 모델/마이크/연결 없이 silent PCM·실제 Chromium 기본 장치 clock 측정
+- `artifacts/browser-output-default-smoke.json`: 기본 48kHz 출력·65.774초·65개 source 완료, WSLg RDPSink RUNNING 확인. 기존 대화 조건의 clock 정지 근본 원인 확정 제외
+- 출력 단독 성공은 물리 재생/AEC·chunk 스트리밍/모델 동시 실행·장시간 대화 성공과 구분
+
+- `artifacts/browser-30-minute-silent-smoke.json`: 실제 Chromium/설치 wheel/로컬 GPU의 같은 연결에서 1801.383초·986회 텍스트 응답/재생 통과
+- 종료 단계의 합성 음성 final 1회·재생 중 끼어들기 1회·종료 세션 0 확인, 문맥 기억은 10번째의 이름 anchor 포함 메시지 19개로 검증
+- 장시간 텍스트 구간 마이크 off·무음 sink 조건, 최초 문맥의 30분 보존·연속 음성 capture·물리 재생/AEC 인수 및 기본 출력 clock 정지 해결 증거 제외
+
+- 고정 합성 문맥의 실제 모델 이름 기억 측정: `scripts/context-model-smoke.py --config <설정> --trials 10`
+- `artifacts/context-model-smoke.json`: 메시지 19개에서 temperature 0/0.3 각각 10/10 이름 포함 응답, `measured` 상태는 브라우저/한국어 품질 인수 성공 의미 제외
+- 브라우저 기억 검사 시 요청의 메시지 수·합성 이름 anchor 포함 여부만 기록, 실제 생성 문맥의 원문 기록 제외
+
+- 장시간 브라우저 시험: `scripts/browser-smoke.py --duration 1800`과 기존 config·Chromium 인자 사용, 같은 연결의 텍스트/재생 구간 최소 시간 검사
+- 문맥 기억 검사는 `--turns`번째에서 수행, 이후 반복은 장시간 연결·생성·재생 안정성 검증이며 최초 문맥의 무기한 보존 주장 제외
+- 장시간 텍스트 구간의 마이크는 off, 종료 전 음성 입력·재생 중 끼어들기 별도 검사. 30분 연속 음성 capture·실기기/AEC 인수 대체 불가
+
+- 브라우저 부분 자막 초기화·마이크 off의 늦은 부분 전사 제외·빈 전사 상태 보존 회귀: client 18개·capture 3개 통과
+- 최신 설치 wheel의 실제 Chromium/로컬 모델: `artifacts/browser-caption-reset-smoke.json`, 10회·문맥 기억·음성 final 1회·재생 중 끼어들기 1회·종료 세션 0 통과
+- 해당 브라우저 시험은 합성 입력·48kHz 기본 출력 경로 조건, 실제 마이크·스피커/AEC·30분 연속 브라우저 인수와 구분
+
 ## 추가 배치 답변과 무음 출력 재시험
 
 - SenseVoice 실제 VAD/STT 경로 통과: 3회 유효 buffered partial·최종 전사 1회, fixture LLM과 합성 TTS 입력 조건
@@ -8,6 +111,9 @@
 - baseline transducer와 대체 SenseVoice는 서로 다른 STT architecture, 교체 시 코어/브라우저의 모델별 분기 추가 없음
 - 긴 발화 첫 시험은 gated 처리 뒤 전체 파형의 one-batch 비교 요청에서 SenseVoice 22초 상한 거절. 전체 waveform 비교와 20초 구간 처리 인수 구분
 - `--allow-comparison-rejection`을 명시하면 one-batch 거절을 별도 status로 보존, gated final/partial/segment 요구는 유지. 기본 실행은 비교 거절 시 여전히 실패
+- `sensevoice-long-speech-smoke.json` 통과: 25.627초 합성 입력·20초 구간 경계 1회·유효 partial 23회·최종 합산 전사 1회/213자
+- full/cropped 전체 파형 one-batch 비교는 각각 `input_rejected`, 성공한 긴 발화의 구간 처리와 전체 파형 허용 여부 구분
+- 실제 한국어 정확도·사람 발화·마이크/AEC·장시간 browser는 별도 인수, fixture LLM 진단이 실제 assistant 응답 품질 근거는 아님
 - 음성 adapter의 빈 결과·모델 lock 대기·HTTP 응답 cleanup 경계에서 취소를 재검사, 늦은 completed 전달 방지
 - 해당 계약 회귀 포함 Python 56개 통과, fixture 검사와 실제 모델 취소/브라우저 회귀 구분
 - Nginx TLS 시험 경로 추가: `browser-smoke.py --nginx <실행 파일>`, 배포 template·loopback 임시 인증서·실제 installed wheel 사용
@@ -251,6 +357,8 @@ node --check src/real_pa/browser/capture.js
 - 각 입력부터 브라우저 음성 버퍼 재생 완료까지 1.783–5.426초, 응답 길이·재생 시간을 포함한 단일 합성 시험
 - 브라우저 fake microphone의 합성 한국어 음성으로 최종 전사 1회·재생 중 음성 끼어들기 1회 확인
 - `scripts/browser-smoke.py`: Playwright 설치 환경과 Chromium 경로 필요, 실제 사용자 음성·키 기록 없음
+- 연속 합성 음성 시험: `--voice-turns 10`으로 같은 capture track을 켠 상태에서 음성 final·응답 재생 완료 10회 검사, 텍스트 구간과 음성 구간 시간 별도 기록
+- 합성 final 증가와 응답 완료를 모두 확인한 사이클만 집계, 물리 마이크·스피커/AEC·30분 인수와 구분
 - `artifacts/browser-smoke.json`과 스크린샷은 로컬 검증 산출물이며 버전 관리 제외
 - headless WebAudio 완료는 실제 스피커 출력 증거가 아니며, 실제 마이크/AEC·Ubuntu 26·장시간·클라우드 배포 검증 필요
 - 이후 마이크 permission/on-off 경합·queued frame 폐기 회귀 추가, 브라우저 fixture 11개 통과
@@ -317,3 +425,10 @@ node --check src/real_pa/browser/capture.js
 - 무음 sink는 clock을 진행하며 graph를 render하는 용도, [Chrome 공식 설명](https://developer.chrome.com/blog/audiocontext-setsinkid/) 참조. 초기 `--disable-audio-output` flag 효과를 검증한 결과와 구분
 - 무음 sink 시험에서 텍스트 2회·문맥·유효 음성 final 통과, 이후 음성 응답 재생 완료 대기 timeout으로 전체 실패
 - 해당 음성 단계 VAD 50 frames·STT 31 frames·nonempty final 1회 확인, 후속 생성·재생 상태 진단 추가
+
+## 8B 연속 음성 지속 시간 검증
+
+- `browser-smoke.py --voice-duration 1800 --voice-turns 100`: 같은 capture/연결에서 최소 30분 및 최소 100회 음성 응답 완료 조건
+- 시간 기준은 음성 단계 시작부터 응답 완료까지, 대기 상태만 유지하는 시간 측정 제외
+- 현재 실행 증거: ignored `artifacts/browser-qwen3-8b-30min-voice.json`, `running`은 완료 판정 제외
+- 합성 입력·무음 출력·로컬 GPU/Chromium 조건, 실제 Windows 장치/AEC·WAN 결과와 구분

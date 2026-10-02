@@ -20,6 +20,26 @@ class AudioFixture(FixtureProvider):
 
 
 class RobotTests(unittest.IsolatedAsyncioTestCase):
+    async def test_punctuated_spoken_close_ends_input_without_a_reply(self):
+        class Vad(AudioFixture):
+            async def stream(self, request, context):
+                self.frames += 1
+                yield Event('speech_started' if self.frames == 1 else 'speech_ended')
+        class Stt(AudioFixture):
+            async def stream(self, request, context):
+                if request.data['final']:
+                    yield Event('transcript_final', {'text': '대화 끝.'})
+        session = DialogueSession('s', FixtureProvider(), FixtureProvider('tts'))
+        runtime = RobotRuntime(session, {'stt': Stt('stt'), 'vad': Vad('vad'), 'kws': AudioFixture('kws')})
+        await runtime.start(ui_started=True)
+        try:
+            for _ in range(2): runtime.accept_audio(b'\1\0' * 1600)
+            await asyncio.wait_for(runtime.running, 2)
+            self.assertEqual(session.turn, 0)
+            self.assertEqual(session.history, [])
+        finally:
+            await runtime.close()
+
     async def test_spoken_stop_emits_final_and_keeps_input_for_the_next_turn(self):
         class Vad(AudioFixture):
             async def stream(self, request, context):
@@ -28,7 +48,7 @@ class RobotTests(unittest.IsolatedAsyncioTestCase):
         class Stt(AudioFixture):
             async def stream(self, request, context):
                 if request.data['final']:
-                    yield Event('transcript_final', {'text': '그만' if request.data['sequence'] == 2 else '다음 질문'})
+                    yield Event('transcript_final', {'text': '그만.' if request.data['sequence'] == 2 else '다음 질문'})
         session = DialogueSession('s', FixtureProvider(), FixtureProvider('tts'))
         runtime = RobotRuntime(session, {'stt': Stt('stt'), 'vad': Vad('vad'), 'kws': AudioFixture('kws')})
         await runtime.start(ui_started=True)
@@ -39,13 +59,17 @@ class RobotTests(unittest.IsolatedAsyncioTestCase):
                     generation, event = await session.next_event()
                     if event.kind == 'transcript_final': break
             self.assertEqual(generation, session.generation)
-            self.assertEqual(event.data, {'text': '그만', 'control': 'interrupt'})
+            self.assertEqual(event.data, {'text': '그만.', 'control': 'interrupt', 'input_id': 0})
             self.assertEqual(session.turn, 0)
             self.assertFalse(runtime.running.done())
             self.assertEqual(len(runtime.audio_window), 0)
+            await runtime.reset_input(input_id=77)
             for _ in range(2): runtime.accept_audio(b'\1\0' * 1600)
             async with asyncio.timeout(2):
-                while session.turn == 0: await asyncio.sleep(.001)
+                while True:
+                    _, event = await session.next_event()
+                    if event.kind == 'transcript_final': break
+            self.assertEqual(event.data['input_id'], 77)
             self.assertEqual(session.history[0]['content'], '다음 질문')
         finally:
             await runtime.close()

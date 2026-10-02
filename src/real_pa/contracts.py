@@ -21,6 +21,8 @@ class ModelLoadError(ProviderError):
     code = "model_load_error"
 class ResourceExhausted(ProviderError):
     code = "resource_exhausted"
+class ContextCapacityExceeded(ProviderError):
+    code = "context_capacity_exceeded"
 
 @dataclass(frozen=True)
 class AudioFrame:

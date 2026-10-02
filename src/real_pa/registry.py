@@ -1,4 +1,5 @@
 """Explicit factories and atomic composition; never import code from settings."""
+import asyncio
 from .contracts import ConfigurationError
 
 class Registry:
@@ -42,6 +43,8 @@ class Registry:
             for provider in reversed(list(loaded.values())):
                 try:
                     await provider.close()
-                except Exception:
+                except (Exception, asyncio.CancelledError):
+                    # A cancelled close must not prevent rollback of earlier
+                    # providers or replace the original load/cancellation error.
                     pass
             raise

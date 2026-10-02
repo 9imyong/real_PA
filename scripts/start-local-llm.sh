@@ -9,8 +9,13 @@ if (( $# > 1 )) || [[ ! -f "$model" ]]; then
 fi
 model=$(realpath -- "$model")
 cache_mib=${REAL_PA_LLM_CACHE_MIB:-256}
+context_tokens=${REAL_PA_LLM_CONTEXT:-8192}
 if [[ ! "$cache_mib" =~ ^[0-9]+$ ]]; then
   echo 'REAL_PA_LLM_CACHE_MIB must be a nonnegative integer.' >&2
+  exit 2
+fi
+if [[ ! "$context_tokens" =~ ^[0-9]+$ ]] || (( 10#$context_tokens < 512 || 10#$context_tokens > 32768 )); then
+  echo 'REAL_PA_LLM_CONTEXT must be an integer between 512 and 32768.' >&2
   exit 2
 fi
 docker run --pull never --rm -d --name real-pa-llm-dev --gpus all \
@@ -18,5 +23,5 @@ docker run --pull never --rm -d --name real-pa-llm-dev --gpus all \
   --mount "type=bind,source=$(dirname -- "$model"),target=/models,readonly" \
   localforge/llama-cuda:56b9eb280a67 \
   --model "/models/$(basename -- "$model")" --host 0.0.0.0 --port 8080 \
-  --ctx-size 2048 --n-gpu-layers 99 --threads 4 --no-webui --reasoning off \
+  --ctx-size "$context_tokens" --n-gpu-layers 99 --threads 4 --no-webui --reasoning off \
   --cache-ram "$cache_mib"

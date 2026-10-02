@@ -32,6 +32,21 @@ GitHub CI는 마크다운 형식과 내부 링크 검사 수행.
 
 ## 설정 정책
 
+- 로컬 LLM 선택: `prepare-local-config.py --llm-model <기존 GGUF 경로> --output-dir <새 설정 폴더>`, 상대 경로는 `--models-root` 기준·절대 경로 허용
+- 서버 model alias는 `--llm-model-id <이름>`으로 지정, 생략 시 GGUF 파일명 사용. 선택 파일의 SHA256은 manifest에 기록
+- 생성 설정의 출력 한도 기본 512 token, `--llm-max-tokens`로 조정. 짧은 일반 대화와 완결된 설명을 요청하는 기본 system prompt 적용, `--llm-system-prompt`로 교체
+- GPU 실행기의 context 기본 8192 token, `REAL_PA_LLM_CONTEXT`로 512–32768 범위 선택. 실제 모델 지원 길이와 GPU 메모리 확인 필요
+- 별도 설정 생성 후 `check-config --profile api`와 실제 서버/모델 시험 필요, alias 정적 검사는 실제 다른 모델의 한국어 품질·교체 성공 증거 제외
+
+- `chat_http` adapter 생성 시 `max_tokens`는 양의 정수, `temperature`는 유한한 0 이상 수, `enable_thinking`은 boolean으로 검증
+- `system_prompt`는 operator 설정의 비어 있지 않은 4000자 이하 문자열, 각 요청의 첫 system message로 삽입. 세션 기록 변경·모델별 코어 분기 없음
+- 설정 변경은 API 재시작 후 새 세션에 적용, 잘못된 기존 응답이 쌓인 대화는 재연결 필요. 모델 context와 세션 기록 상한에 따른 오래된 대화 삭제 가능
+- 순차 한국어 진단: `scripts/llm-quality-smoke.py --config <worker.toml> --review`, 합성 입력만 사용·artifact에는 길이/종료 사유/회상 지표만 저장. 사실 정확도는 답변의 별도 검토 필요
+- 현재 로컬 검증 설정: ignored `config/local/qwen3-8b/worker.toml`, 공식 Qwen3-8B-Q4_K_M·SenseVoice·Supertonic. 모델 준비 후 `bash scripts/start-local-llm.sh artifacts/models/qwen3-8b/Qwen3-8B-Q4_K_M.gguf`, `.venv/bin/python scripts/start-local-api.py --config config/local/qwen3-8b/worker.toml` 순서
+- 0.8B 기본 파일은 이전 연결 시험용 자산, 한국어 대화 품질 보장 제외. 8B 시험에서도 사실 오류 관찰, 모델 크기 증가만으로 정확도 보장 불가
+- `token_env`는 환경 변수 이름, `base_url`은 HTTP(S) 주소와 유효 port 형식 요구. 잘못된 값은 HTTP client 생성 전 거절
+- 해당 옵션 검사는 adapter 생성 단계, `check-config`의 정적 manifest 검사와 실제 엔진별 옵션 지원·품질 측정 구분
+
 현재 환경 변수: REAL_PA_WORKER_TOKEN·REAL_PA_ROBOT_TOKEN, operator가 직접 설정한 token_env.
 비밀 값은 환경에서 읽고 설정·로그·명령 예제에 실제 값 기록 금지.
 구현 시 모델 경로·장치·sample rate·큐 상한·timeout·유휴 종료·로그 수준 설정 명세와 기본값 제공.
@@ -166,6 +181,13 @@ GitHub CI는 마크다운 형식과 내부 링크 검사 수행.
 
 ## 독립 API와 테스트 브라우저
 
+- 빠른 로컬 실행: `.venv/bin/python scripts/start-local-api.py --config config/local/sensevoice/worker.toml`
+- 기본 localhost:18484·loopback 전용, REAL_PA_API_TOKEN이 없으면 `config/local/browser.token`을 소유자 전용 mode 600으로 생성·재사용
+- 브라우저 접속 키 칸에는 파일 내용 입력, 키 값의 터미널/진단 출력 제외. 기존 환경 키가 있으면 해당 값 우선 사용
+- 기존 키 파일의 잘못된 권한·길이·symlink는 덮어쓰지 않고 거절, 실행 종료는 Ctrl+C
+- 실제 사용 확인 순서: 텍스트 대화 → 마이크 on/후속 발화 → 답변 도중 끼어들기 → 마이크 off/텍스트 → 종료
+- 스피커 반향 시험: 사용자 침묵 중 답변의 자체 인식·거짓 중단 관찰, 합성/헤드셋 성공과 구분. 실제 측정 전 AEC 성능 보장 제외
+
 1. `uv sync --locked --extra audio --extra dev`로 환경 준비
 2. 자체 GPU LLM 서버와 로컬 모델 manifest 준비, 기존 `prepare-local-config.py` 사용 가능
 3. REAL_PA_API_TOKEN 환경에 16자 이상의 접속 키 설정
@@ -184,3 +206,41 @@ GitHub CI는 마크다운 형식과 내부 링크 검사 수행.
 - 모델 config만 변경해 역할 교체, API/브라우저 계약과 코어에 모델별 분기 추가 금지
 - native 모델의 취소 정리는 별도 추적, 입력은 재생 flush 이후 계속 진행
 - [요구사항](../requirements/REQ-API-001.md), [전송 계약](../specs/duplex-transport.md)
+
+## 자체 GPT-SoVITS TTS 연결
+
+### 한국어 VITS 대안
+
+- `sherpa_vits_korean`: 공식 Sherpa 릴리스의 `vits-mimic3-ko_KO-kss_low` 전용, 기존 Supertonic과 별도 architecture
+- options: `num_threads`(양의 정수, 기본 2), `speed`(유한한 양수, 기본 1)
+- manifest: role `tts`, languages `ko`, features `phrase/chunks/cancel`, sample_rates `[22050]`
+- named artifacts `model`(ONNX), `tokens`, `phondata`(espeak data 내부 파일), 전체 espeak data 파일별 해시 보존
+- native 작업 취소의 출력 폐기/실행 종료 대기 계약 재사용, 대화 코어와 브라우저 변경 없음
+- 로컬 별도 설정: `config/local/mimic3-korean/worker.toml`, 기본 설정 자동 교체 제외
+- 설정 생성기로 선택: `--tts-model mimic3-korean --vits-dir <압축 해제 디렉터리>`, 기본 선택은 `supertonic`
+
+```bash
+.venv/bin/python scripts/prepare-local-config.py --models-root ../stt_test/models --stt-model sensevoice --tts-model mimic3-korean --vits-dir artifacts/models/mimic3-korean/vits-mimic3-ko_KO-kss_low --output-dir config/local/mimic3-generated
+.venv/bin/python -m real_pa.cli check-config config/local/mimic3-generated/worker.toml --profile api
+```
+
+- 모델 상류 CC0 파일·archive SHA256는 ignored 자산 provenance에 기록, espeak data 배포 권리 확인은 별도 필요
+- 실제 모델 browser 10턴·합성 음성 2회·끼어들기 통과, 문장부호 skip 경고·음질/물리 재생은 검증 전
+
+### HTTP 연결
+
+- `gptsovits_http`: 기존 tts-serving 또는 자체 GPT-SoVITS `/tts` endpoint용 한국어 어댑터
+- [상류 요청/출력 구현](https://github.com/RVC-Boss/GPT-SoVITS/blob/main/api_v2.py)의 `media_type=raw`, `streaming_mode=true` 사용
+- TTS provider의 adapter만 `gptsovits_http`로 선택, 다른 역할·대화 코어 유지
+- options 필수: `url`(전체 POST endpoint), `sample_rate`(16000/24000/32000/48000), `ref_audio_path`(서버 로컬 파일)
+- options 선택: `prompt_text`, `prompt_lang=ko`, `token_env`(자체 gateway X-API-Key의 환경변수 이름)
+- manifest: role `tts`, features `phrase/chunks/cancel`, languages `ko`, sample_rates에 실제 출력률 포함
+- 모델 revision·hash·license는 실제 배치 자산 기준으로 작성, 참조 음성/전사·접속 키는 버전 관리 제외
+- raw 응답의 sample rate metadata 부재: 서버 모델 출력률과 설정의 일치 확인 필수, 기본값 추정 금지
+- 설정 출력률의 manifest 누락/불일치는 시작 거부, 서버의 실제 출력률까지 자동 탐지하는 계약 아님
+- mono PCM16LE의 `audio/raw` 또는 `application/octet-stream` 응답만 수용, WAV/JSON·빈 출력·홀수 byte 종료 거부
+- 40ms chunk와 마지막 부분 frame 전달, task 취소/전체 deadline 시 응답 닫기·완료 event 금지
+- 응답 body read 정지 중 Context 취소 신호도 즉시 처리·pending read 정리, 동시에 도착한 chunk 폐기
+- 응답 header 대기에도 같은 취소 경계 적용, 취소와 함께 도착한 HTTP response는 전달 없이 닫기
+- HTTP 연결 취소는 클라이언트 결과 수신 중단, 서버 GPU 작업의 즉시 취소 보장 아님
+- 현재 검증: 전송 fixture·오류·취소 계약. 실제 GPT-SoVITS 모델·한국어 품질·browser 음성 회귀 미완료

@@ -7,7 +7,7 @@ import unittest
 
 from real_pa.config import read_config, ProviderConfig
 from real_pa.contracts import (Capabilities, Context, Event, Request,
-                               ConfigurationError, UnsupportedCapability)
+                               ConfigurationError, UnsupportedCapability, ContextCapacityExceeded)
 from real_pa.registry import Registry
 from real_pa.session import DialogueSession
 
@@ -73,6 +73,36 @@ class ConfigTests(unittest.TestCase):
 
 
 class RegistryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_cancelled_close_does_not_stop_rollback_or_mask_load_failure(self):
+        closed = []
+        class First(FixtureProvider):
+            async def close(self): closed.append('llm')
+        class Second(FixtureProvider):
+            async def close(self):
+                closed.append('tts')
+                raise asyncio.CancelledError
+        registry = Registry()
+        registry.register('llm', 'fixture', lambda c: First())
+        registry.register('tts', 'fixture', lambda c: Second('tts', fail_load=True))
+        with self.assertRaisesRegex(RuntimeError, 'load failed'):
+            await registry.build({'llm': config(), 'tts': config('tts')})
+        self.assertEqual(closed, ['tts', 'llm'])
+
+    async def test_load_cancellation_is_preserved_after_all_cleanup_attempts(self):
+        closed = []
+        class Model(FixtureProvider):
+            async def load(self):
+                if self.capabilities.role == 'tts': raise asyncio.CancelledError
+            async def close(self):
+                closed.append(self.capabilities.role)
+                if self.capabilities.role == 'tts': raise asyncio.CancelledError
+        registry = Registry()
+        for role in ('llm', 'tts'):
+            registry.register(role, 'fixture', lambda c: Model(c.role))
+        with self.assertRaises(asyncio.CancelledError):
+            await registry.build({'llm': config(), 'tts': config('tts')})
+        self.assertEqual(closed, ['tts', 'llm'])
+
     async def test_invalid_later_adapter_is_rejected_before_any_model_load(self):
         loads = []
         class Model(FixtureProvider):
@@ -118,6 +148,137 @@ class RegistryTests(unittest.IsolatedAsyncioTestCase):
 
 
 class SessionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_text_only_skips_tts_and_commits_only_acknowledged_display(self):
+        class NoTts(FixtureProvider):
+            async def stream(self, request, context):
+                raise AssertionError('text mode must not synthesize')
+                yield
+        session = DialogueSession('text-mode', FixtureProvider(), NoTts('tts'))
+        try:
+            await session.submit('첫 질문', metadata={'output_audio': False})
+            kinds = []
+            while True:
+                generation, event = await session.next_event()
+                kinds.append(event.kind)
+                if event.kind == 'turn_done': break
+            self.assertNotIn('audio_chunk', kinds)
+            self.assertEqual(session.heard, [])
+            self.assertFalse(session.acknowledge_text(generation - 1))
+            self.assertTrue(session.acknowledge_text(generation))
+            self.assertFalse(session.acknowledge_text(generation))
+            await session.submit('후속 질문', metadata={'output_audio': False})
+            self.assertEqual(session.history[1], {'role': 'assistant', 'content': '안녕하세요.'})
+            while True:
+                _, event = await session.next_event()
+                if event.kind == 'turn_done': break
+            await session.interrupt()
+            self.assertEqual(sum(item['role'] == 'assistant' for item in session.history), 1)
+        finally:
+            await session.close()
+
+    async def test_interrupted_capacity_retry_cannot_trim_new_turn_or_emit_late_output(self):
+        retry_started, release = asyncio.Event(), asyncio.Event()
+        class Model(FixtureProvider):
+            async def stream(self, request, context):
+                messages = request.data['messages']
+                if messages[-1]['content'] == 'first':
+                    if len(messages) > 1: raise ContextCapacityExceeded()
+                    retry_started.set()
+                    try:
+                        await release.wait()
+                    except asyncio.CancelledError:
+                        # Simulate a native operation returning after cancellation.
+                        await release.wait()
+                    yield Event('text_delta', {'text': 'late cancelled answer'})
+                    yield Event('completed')
+                else:
+                    async for event in super().stream(request, context): yield event
+        session = DialogueSession('s', Model(), FixtureProvider('tts'))
+        session.history = [{'role': 'user', 'content': 'old'}]
+        try:
+            await session.submit('first')
+            await asyncio.wait_for(retry_started.wait(), 2)
+            previous = session.task
+            await session.submit('new')
+            await asyncio.wait_for(session.task, 2)
+            release.set()
+            await asyncio.wait_for(asyncio.gather(previous, return_exceptions=True), 2)
+            self.assertEqual([message['content'] for message in session.history], ['old', 'first', 'new'])
+            events = []
+            while not session.output.empty(): events.append((await session.next_event())[1])
+            self.assertFalse(any(event.kind == 'context_trimmed' for event in events))
+            self.assertFalse(any(event.data.get('text') == 'late cancelled answer' for event in events))
+        finally:
+            release.set()
+            await session.close()
+
+    async def test_capacity_error_after_output_never_retries_or_trims(self):
+        calls = []
+        class Model(FixtureProvider):
+            async def stream(self, request, context):
+                calls.append(1)
+                yield Event('tool_started', {'id': 'fixture-operation'})
+                raise ContextCapacityExceeded()
+        session = DialogueSession('s', Model(), FixtureProvider('tts'))
+        session.history = [{'role': 'user', 'content': 'old'}]
+        try:
+            await session.submit('new')
+            async with asyncio.timeout(2):
+                while (await session.next_event())[1].kind != 'error': pass
+            self.assertEqual(len(calls), 1)
+            self.assertEqual([message['content'] for message in session.history], ['old', 'new'])
+        finally:
+            await session.close()
+
+    async def test_capacity_fit_commits_whole_old_turn_only_after_acceptance(self):
+        requests = []
+        class Model(FixtureProvider):
+            async def stream(self, request, context):
+                requests.append(list(request.data['messages']))
+                if len(request.data['messages']) > 3:
+                    raise ContextCapacityExceeded()
+                async for event in super().stream(request, context): yield event
+        session = DialogueSession('s', Model(), FixtureProvider('tts'))
+        session.history = [{'role':'user','content':'old'}, {'role':'assistant','content':'old reply'},
+                           {'role':'user','content':'recent'}, {'role':'assistant','content':'recent reply'}]
+        try:
+            await session.submit('new')
+            trimmed = []
+            async with asyncio.timeout(2):
+                while True:
+                    generation, event = await session.next_event()
+                    if event.kind == 'context_trimmed': trimmed.append(event.data['removed_messages'])
+                    if event.kind == 'audio_chunk': session.acknowledge(generation, event.data['chunk_id'])
+                    if event.kind == 'turn_done': break
+            self.assertEqual([len(messages) for messages in requests], [5, 3])
+            self.assertEqual(trimmed, [2])
+            self.assertEqual(session.history[0]['content'], 'recent')
+        finally:
+            await session.close()
+
+    async def test_rejected_input_does_not_poison_followup_history(self):
+        class Model(FixtureProvider):
+            async def stream(self, request, context):
+                if request.data['messages'][-1]['content'] == 'too long':
+                    raise ContextCapacityExceeded()
+                async for event in super().stream(request, context): yield event
+        session = DialogueSession('s', Model(), FixtureProvider('tts'))
+        session.history = [{'role': 'user', 'content': 'prior context'}]
+        try:
+            await session.submit('too long')
+            async with asyncio.timeout(2):
+                while (await session.next_event())[1].kind != 'input_rejected': pass
+            self.assertEqual(session.history, [{'role': 'user', 'content': 'prior context'}])
+            await session.submit('short request')
+            async with asyncio.timeout(2):
+                while True:
+                    generation, event = await session.next_event()
+                    if event.kind == 'audio_chunk': session.acknowledge(generation, event.data['chunk_id'])
+                    if event.kind == 'turn_done': break
+            self.assertEqual(session.history[-1]['content'], 'short request')
+        finally:
+            await session.close()
+
     async def test_separate_newline_tokens_do_not_fail_speech_turn(self):
         class TextProvider(FixtureProvider):
             async def stream(self, request, context):

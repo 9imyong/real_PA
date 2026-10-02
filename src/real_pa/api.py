@@ -32,9 +32,9 @@ def response(status, body, content_type='application/json; charset=utf-8'):
 
 
 class DuplexAPI:
-    def __init__(self, providers, token, *, max_sessions=4):
+    def __init__(self, providers, token, *, max_sessions=4, idle_timeout=300):
         self.providers = providers
-        self.gateway = RobotGateway(providers, token)
+        self.gateway = RobotGateway(providers, token, idle_timeout=idle_timeout)
         self.max_sessions = max_sessions
         self.active = 0
 

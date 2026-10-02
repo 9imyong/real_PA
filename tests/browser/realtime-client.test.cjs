@@ -6,6 +6,7 @@ const { test } = require('node:test');
 const vm = require('node:vm');
 
 function browser({ handshake = true, microphone = true } = {}) {
+  let time = 0;
   const sockets = [];
   const tracks = [
     {
@@ -20,7 +21,7 @@ function browser({ handshake = true, microphone = true } = {}) {
   ];
   const media = { getTracks: () => tracks, getAudioTracks: () => tracks };
   const node = () => ({
-    disconnect() {},
+    disconnect() { this.disconnected = true; },
     connect() {
       return this;
     },
@@ -103,6 +104,7 @@ function browser({ handshake = true, microphone = true } = {}) {
     WebSocket: Socket,
     setTimeout,
     clearTimeout,
+    performance: { now: () => time },
     Uint8Array,
     DataView,
     atob,
@@ -113,7 +115,8 @@ function browser({ handshake = true, microphone = true } = {}) {
     texts = [],
     errors = [];
   const listener = new window.RealPAClient({ token: 'unit-browser-credential', microphone, onState: (s) => states.push(s), onText: (t) => texts.push(t), onError: (e) => errors.push(e) });
-  return { listener, sockets, tracks, navigator, states, texts, errors };
+  return { listener, sockets, tracks, navigator, states, texts, errors,
+    advanceTime: milliseconds => { time += milliseconds; } };
 }
 const audio = (generation) => ({
   type: 'audio_chunk',
@@ -121,6 +124,74 @@ const audio = (generation) => ({
   data: { pcm: { $pcm16: 'AAAAAA==' }, sample_rate: 16000, chunk_id: 1 },
 });
 const tick = () => new Promise((resolve) => setImmediate(resolve));
+
+test('completed and interrupted playback nodes are disconnected from the output graph', async () => {
+  const { listener, sockets } = browser({ microphone: false });
+  await listener.start();
+  sockets[0].event(audio(1));
+  const completed = [...listener._sources][0];
+  completed.onended();
+  assert.equal(completed.disconnected, true);
+  sockets[0].event(audio(2));
+  const interrupted = [...listener._sources][0];
+  listener.interrupt();
+  assert.equal(interrupted.stopped, true);
+  assert.equal(interrupted.disconnected, true);
+  assert.equal(listener._sources.size, 0);
+  await listener.stop();
+});
+
+test('rapid microphone off/on rejects old input captions in the same generation', async () => {
+  const { listener, sockets } = browser();
+  const captions = [];
+  listener.onTranscript = (text, final) => captions.push({ text, final });
+  await listener.start();
+  await listener.setMicrophone(false);
+  await listener.setMicrophone(true);
+  assert.equal(sockets[0].sent.at(-1).input_id, 2);
+  for (const type of ['transcript_partial', 'transcript_final']) {
+    sockets[0].event({ type, generation_id: 0, data: { text: 'old', input_id: 0 } });
+  }
+  assert.equal(captions.some(item => item.text === 'old'), false);
+  sockets[0].event({ type: 'transcript_partial', generation_id: 0, data: { text: 'new', input_id: 2 } });
+  assert.equal(captions.at(-1).text, 'new');
+  await listener.stop();
+});
+
+test('injected capture device replaces native acquisition and closes its resources', async () => {
+  const { listener, tracks, navigator, sockets } = browser();
+  navigator.mediaDevices.getUserMedia = async () => { throw new Error('native path must not run'); };
+  const media = { getTracks: () => tracks, getAudioTracks: () => tracks };
+  let opened = 0, closed = 0;
+  listener.captureDevice = {
+    async open({ context }) { assert.equal(context.state, 'running'); opened++; return { stream: media, echoCancellation: true }; },
+    close(stream) { assert.equal(stream, media); closed++; },
+  };
+  await listener.start();
+  assert.equal(listener.isActive, true);
+  assert.equal(opened, 1);
+  sockets[0].event(audio(1));
+  await listener.setMicrophone(false);
+  assert.equal(closed, 1);
+  assert.equal(tracks[0].stopped, true);
+  assert.equal(listener.isActive, true);
+  await listener.stop();
+  assert.equal(closed, 1);
+});
+
+test('capture adapter cannot silently omit AEC and cleanup failure still stops tracks', async () => {
+  const { listener, tracks } = browser({ microphone: false });
+  await listener.start();
+  listener.captureDevice = {
+    async open() { return { stream: { getTracks: () => tracks, getAudioTracks: () => tracks } }; },
+    close() { throw new Error('adapter cleanup failed'); },
+  };
+  await assert.rejects(listener.setMicrophone(true));
+  assert.equal(tracks[0].stopped, true);
+  assert.equal(listener.microphone, false);
+  assert.equal(listener.isActive, true);
+  await listener.stop();
+});
 
 test('silent session clock is released on disconnect and recreated on reconnect', async () => {
   const { listener } = browser({ microphone: false });
@@ -249,6 +320,48 @@ test('completed playback reveals the panel without stopping continuous capture',
   await listener.stop();
 });
 
+test('stalled output releases capture and preserves text without acknowledging unheard chunks', async () => {
+  const { listener, sockets, tracks, errors, advanceTime } = browser();
+  await listener.start();
+  sockets[0].event(audio(1));
+  const source = [...listener._sources][0];
+  advanceTime(2999);
+  listener._checkPlaybackClock();
+  assert.equal(listener.isActive, true);
+  advanceTime(1);
+  listener._checkPlaybackClock();
+  assert.equal(listener.isActive, true);
+  assert.equal(source.stopped, true);
+  assert.equal(tracks[0].stopped, true);
+  assert.equal(listener._playbackWatch, null);
+  assert.equal(sockets[0].sent.filter(message => message.type === 'playback_ack').length, 0);
+  assert.equal(errors.length, 0);
+  assert.equal(listener.microphone, false);
+  sockets[0].event({ type: 'interrupted', generation_id: 2 });
+  assert.equal(listener.sendText('텍스트로 계속'), true);
+  assert.equal(sockets[0].sent.at(-1).output_audio, false);
+  sockets[0].event({ type: 'interrupted', generation_id: 3 });
+  sockets[0].event({ type: 'turn_done', generation_id: 3 });
+  assert.deepEqual(sockets[0].sent.at(-1), { type: 'text_ack', generation_id: 3 });
+  await listener.stop();
+});
+
+test('advancing output clock keeps playback active and interruption clears the watchdog', async () => {
+  const { listener, sockets, advanceTime, errors } = browser();
+  await listener.start();
+  sockets[0].event(audio(1));
+  for (let i = 0; i < 5; i++) {
+    advanceTime(2000);
+    listener._context.currentTime += 2;
+    listener._checkPlaybackClock();
+    assert.equal(listener.isActive, true);
+  }
+  assert.equal(errors.length, 0);
+  listener.interrupt();
+  assert.equal(listener._playbackWatch, null);
+  await listener.stop();
+});
+
 test('text conversation connects without microphone permission', async () => {
   const { listener, navigator, sockets } = browser({ microphone: false });
   navigator.mediaDevices.getUserMedia = () => { assert.fail('text mode must not request a microphone'); };
@@ -258,6 +371,64 @@ test('text conversation connects without microphone permission', async () => {
   assert.equal(listener.sendText('안녕하세요'), true);
   assert.equal(sockets[0].sent.at(-1).type, 'text');
   await listener.stop();
+});
+
+test('microphone permission failure restores text mode without stopping output', async () => {
+  const { listener, navigator, sockets } = browser({ microphone: false });
+  await listener.start();
+  sockets[0].event(audio(1));
+  const source = [...listener._sources][0];
+  navigator.mediaDevices.getUserMedia = async () => { throw new Error('denied'); };
+  await assert.rejects(listener.setMicrophone(true));
+  assert.equal(listener.microphone, false);
+  assert.equal(listener._media, null);
+  assert.equal(listener._capture, null);
+  assert.equal(listener.isActive, true);
+  assert.equal(source.stopped, false);
+  assert.equal(listener.sendText('텍스트 질문'), true);
+  await listener.stop();
+});
+
+test('unsupported echo cancellation releases the track and restores microphone off', async () => {
+  const { listener, tracks } = browser({ microphone: false });
+  await listener.start();
+  tracks[0].getSettings = () => ({ echoCancellation: false });
+  await assert.rejects(listener.setMicrophone(true));
+  assert.equal(tracks[0].stopped, true);
+  assert.equal(listener.microphone, false);
+  assert.equal(listener._media, null);
+  assert.equal(listener.isActive, true);
+  await listener.stop();
+});
+
+test('lost microphone or failed capture releases input while preserving playback and text', async () => {
+  for (const kind of ['track', 'worklet']) {
+    const { listener, tracks, sockets } = browser();
+    const notices = [];
+    listener.onNotice = text => notices.push(text);
+    await listener.start();
+    sockets[0].event(audio(1));
+    const source = [...listener._sources][0];
+    const queuedCapture = listener._capture.port.onmessage;
+    const lost = kind === 'track' ? tracks[0].onended : listener._capture.onprocessorerror;
+    lost();
+    assert.equal(listener.microphone, false);
+    assert.equal(listener._capture, null);
+    assert.equal(tracks[0].stopped, true);
+    assert.equal(source.stopped, false);
+    assert.equal(listener.isActive, true);
+    assert.equal(notices.length, 1);
+    assert.equal(sockets[0].sent.at(-1).type, 'input_reset');
+    const count = sockets[0].sent.length;
+    queuedCapture({ data: new ArrayBuffer(3200) });
+    assert.equal(sockets[0].sent.length, count);
+    await listener.setMicrophone(true);
+    lost();
+    assert.equal(listener.microphone, true);
+    assert.equal(notices.length, 1);
+    assert.equal(listener.sendText('계속 질문'), true);
+    await listener.stop();
+  }
 });
 
 test('microphone can be toggled without disconnecting text or playback', async () => {
@@ -270,6 +441,45 @@ test('microphone can be toggled without disconnecting text or playback', async (
   assert.equal(listener._capture, null);
   assert.equal(sockets[0].readyState, 1);
   assert.equal(listener.sendText('계속 대화'), true);
+  await listener.stop();
+});
+
+test('microphone off clears partial captions and rejects late partials without stopping playback', async () => {
+  const { listener, sockets } = browser();
+  const transcripts = [];
+  listener.onTranscript = (text, final) => transcripts.push({ text, final });
+  await listener.start();
+  sockets[0].event(audio(1));
+  const source = [...listener._sources][0];
+  sockets[0].event({ type: 'transcript_partial', generation_id: 1, data: { text: '작성 중' } });
+  await listener.setMicrophone(false);
+  assert.deepEqual(transcripts.at(-1), { text: '', final: false });
+  const count = transcripts.length;
+  sockets[0].event({ type: 'transcript_partial', generation_id: 1, data: { text: '늦은 부분 전사' } });
+  assert.equal(transcripts.length, count);
+  assert.equal(source.stopped, false);
+  assert.equal(listener.isActive, true);
+  await listener.setMicrophone(true);
+  sockets[0].event({ type: 'transcript_partial', generation_id: 1, data: { text: '새 발화' } });
+  assert.deepEqual(transcripts.at(-1), { text: '새 발화', final: false });
+  sockets[0].event({ type: 'transcript_partial', generation_id: 1, data: { text: '' } });
+  assert.deepEqual(transcripts.at(-1), { text: '', final: false });
+  await listener.stop();
+});
+
+test('text input and connection loss clear the unfinished voice caption', async () => {
+  const { listener, sockets } = browser();
+  const transcripts = [];
+  listener.onTranscript = (text, final) => transcripts.push({ text, final });
+  await listener.start();
+  sockets[0].event({ type: 'transcript_partial', generation_id: 0, data: { text: '미완성 발화' } });
+  listener.sendText('텍스트로 질문');
+  assert.deepEqual(transcripts.at(-1), { text: '', final: false });
+  sockets[0].event({ type: 'interrupted', generation_id: 1 });
+  sockets[0].event({ type: 'transcript_partial', generation_id: 1, data: { text: '다음 발화' } });
+  sockets[0].close();
+  assert.deepEqual(transcripts.at(-1), { text: '', final: false });
+  assert.equal(listener.isActive, false);
   await listener.stop();
 });
 

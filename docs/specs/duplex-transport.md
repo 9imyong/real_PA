@@ -125,3 +125,25 @@
 - 테스트 UI 접속 키 입력 제거, `/client-config`는 호환 응답 `requires_token=false` 유지
 - CLI API·로컬 실행기 모두 키 없는 모드 기본, `--require-token`으로 인증 선택. robot/worker 인증 변경 없음
 - 인증된 사용자 식별·Lemmy 도구 권한 부여와 별개인 anonymous 대화 모드
+
+## 클라이언트 라우팅 도구 (초안, T009)
+
+- 결정: [ADR-0008](../decisions/ADR-0008-client-routed-tools.md). 구현·실제 8B 검증 전 초안
+- start에 `route: true`와 `tools`가 모두 있을 때만 활성, 미지정 연결은 기존 동작 불변
+- 실행 코드는 클라이언트 소유, real-PA는 정의·호출 요청·결과 전달만 담당
+
+| 방향 | 메시지 | 형식 | 동작 |
+| --- | --- | --- | --- |
+| C→S | start | `tools`: function 정의 배열(최대 16), `route`: boolean | 연결 동안 사용할 도구 후보 등록 |
+| S→C | route_request | data.request_id·text | 발화 확정 후 LLM 시작 전 라우팅 요청 |
+| C→S | route | request_id, `tools`: 이름 배열, `tool_choice`: auto/required/none | 이번 턴 도구 부분집합 결정 |
+| S→C | tool_call | data.call_id·name·arguments·request_id | LLM 도구 호출의 실행 위임 |
+| C→S | tool_output | call_id, `result`: JSON object | 실행 결과 반환, 응답 계속 |
+
+- route 시한 1.5초 초과·형식 오류·미등록 이름: 도구 없이 응답, 세션 유지
+- tool_output 시한 15초 초과: `{"error":"tool_timeout"}`을 결과로 전달, 성공 표현 금지
+- tool_output 결과 최대 65536byte, object 외 형식은 실패 결과 처리
+- 끼어들기·새 발화로 generation 변경 시 route·tool 대기 즉시 해제, 늦은 응답 무시
+- `required`는 부분집합이 1개 이상일 때만 유효, 빈 부분집합은 도구 없이 진행
+- 기존 tool_started·tool_result 이벤트는 유지, 클라이언트 반환 메시지는 이름 충돌 방지를 위해 tool_output 사용
+- 인자 검증·기본값·권한 판단은 클라이언트 책임, 모델 인자를 그대로 신뢰 금지

@@ -2,6 +2,11 @@
 
 ## 출시되지 않음
 
+### 추가: Docker 배포 구성과 모델 다운로드
+
+- `deploy/Dockerfile`·`docker-compose.yml`(LLM·real-PA·선택 TLS 프록시), 컨테이너 안 설정 생성(`configure`)
+- `scripts/download-models.sh`: 평가에 쓴 모델을 SHA256 고정으로 받기, `prepare-local-config.py --llm-tools`
+
 ### 추가: 클라이언트 대화 기록 시작 전달
 
 - start의 선택적 `history`로 클라이언트가 저장한 이전 대화를 연결 세션에 넣음. real-PA는 저장하지 않는 상태 없는 계층 유지

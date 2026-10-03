@@ -1,0 +1,67 @@
+# real-PA on one GPU server: LLM (llama.cpp CUDA) + real-PA API (+ optional TLS proxy).
+#
+#   cd deploy && cp .env.example .env            # set MODELS_ROOT, CONFIG_DIR, PUBLIC_ORIGIN
+#   bash ../scripts/download-models.sh "$MODELS_ROOT"
+#   docker compose build
+#   docker compose run --rm configure           # writes worker.toml into CONFIG_DIR
+#   docker compose up -d llm real-pa            # API on 127.0.0.1:18484
+#   docker compose --profile tls up -d nginx    # optional HTTPS 443 → real-pa
+#
+# Models are mounted at /workspace/models in every container, and the configuration is
+# generated inside a container, so the absolute paths it records always resolve.
+name: real-pa
+
+x-models: &models
+  type: bind
+  source: ${MODELS_ROOT:-/workspace/models}
+  target: /workspace/models
+  read_only: true
+
+services:
+  llm:
+    image: ${LLM_IMAGE:-localforge/llama-cuda:56b9eb280a67}
+    restart: unless-stopped
+    gpus: all
+    volumes: [*models]
+    command: >-
+      --model /workspace/models/qwen3-8b/Qwen3-8B-Q4_K_M.gguf --host 0.0.0.0 --port 8080
+      --ctx-size ${LLM_CONTEXT:-8192} --n-gpu-layers 99 --threads 4 --no-webui --reasoning off
+      --cache-ram ${LLM_CACHE_MIB:-256}
+    # Internal only; real-PA reaches it as http://llm:8080/v1.
+
+  real-pa:
+    build: {context: .., dockerfile: deploy/Dockerfile}
+    image: real-pa:local
+    restart: unless-stopped
+    depends_on: [llm]
+    volumes:
+      - *models
+      - {type: bind, source: "${CONFIG_DIR:-/workspace/real-pa}", target: /workspace/real-pa, read_only: true}
+    command: ["api", "/workspace/real-pa/worker.toml", "--host", "0.0.0.0", "--port", "18484",
+              "--origin", "${PUBLIC_ORIGIN:-http://localhost:18484}"]
+    # Loopback only: the API has no client credential, expose it through the TLS proxy
+    # and restrict who can reach that (firewall / VPN).
+    ports: ["127.0.0.1:${API_PORT:-18484}:18484"]
+
+  # One-shot: generate the configuration inside the container (paths = /workspace/models).
+  configure:
+    image: real-pa:local
+    profiles: [tools]
+    volumes:
+      - *models
+      - {type: bind, source: "${CONFIG_DIR:-/workspace/real-pa}", target: /workspace/real-pa}
+    entrypoint: ["python", "scripts/prepare-local-config.py"]
+    command: ["--models-root", "/workspace/models", "--llm-model", "qwen3-8b/Qwen3-8B-Q4_K_M.gguf",
+              "--llm-model-id", "Qwen3-8B-Q4_K_M.gguf", "--llm-url", "http://llm:8080/v1",
+              "--stt-model", "sensevoice", "--llm-max-tokens", "512", "--llm-tools",
+              "--output-dir", "/workspace/real-pa"]
+
+  nginx:
+    image: nginx:1.27-alpine
+    profiles: [tls]
+    restart: unless-stopped
+    depends_on: [real-pa]
+    ports: ["443:443"]
+    volumes:
+      - {type: bind, source: ./nginx-docker.conf, target: /etc/nginx/conf.d/default.conf, read_only: true}
+      - {type: bind, source: "${TLS_DIR:-/etc/real-pa/tls}", target: /etc/real-pa/tls, read_only: true}

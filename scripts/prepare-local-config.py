@@ -10,6 +10,7 @@ p.add_argument('--llm-model',type=Path,default=Path('llm/Qwen3.5-0.8B-Q4_0.gguf'
  help='Existing GGUF, absolute or relative to models-root')
 p.add_argument('--llm-model-id',help='Served model name; defaults to the GGUF filename')
 p.add_argument('--llm-max-tokens',type=int,default=512)
+p.add_argument('--llm-tools',action='store_true',help='Declare tool calling (needed for clients that route tools, e.g. Lemmy)')
 p.add_argument('--llm-system-prompt',help='Neutral operator rules only; persona belongs to the client session')
 p.add_argument('--stt-model',choices=['transducer','sensevoice'],default='transducer')
 p.add_argument('--tts-model',choices=['supertonic','mimic3-korean'],default='supertonic')
@@ -28,7 +29,7 @@ r=Path(__file__).resolve().parents[1]
 out=a.output_dir or r/'config/local'
 out.mkdir(parents=True,exist_ok=True)
 roles={
- 'llm':('chat_http',{'model':str(a.llm_model)},['stream','cancel'],{'base_url':a.llm_url,'max_tokens':a.llm_max_tokens,'temperature':0.2,'enable_thinking':False,
+ 'llm':('chat_http',{'model':str(a.llm_model)},['stream','cancel']+(['tools'] if a.llm_tools else []),{'base_url':a.llm_url,'max_tokens':a.llm_max_tokens,'temperature':0.2,'enable_thinking':False,
   **({'system_prompt':system_prompt} if system_prompt else {})}),
  'stt':('sherpa',dict(tokens='kws/tokens.txt',encoder='kws/encoder-epoch-99-avg-1.int8.onnx',decoder='kws/decoder-epoch-99-avg-1.onnx',joiner='kws/joiner-epoch-99-avg-1.int8.onnx'),['stream','partial','final','cancel'],{}),
  'kws':('sherpa',dict(tokens='kws/tokens.txt',encoder='kws/encoder-epoch-99-avg-1.int8.onnx',decoder='kws/decoder-epoch-99-avg-1.onnx',joiner='kws/joiner-epoch-99-avg-1.int8.onnx',keywords='kws/keywords.txt'),['stream','cancel'],{}),

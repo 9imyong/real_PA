@@ -1,0 +1,14 @@
+# Models, configs and local runs are mounted at runtime, never sent to the build.
+.git
+.venv
+artifacts
+config/local
+models
+outputs
+recordings
+build
+web
+**/__pycache__
+**/*.pyc
+.env
+.env.*

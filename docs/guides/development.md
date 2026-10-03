@@ -32,6 +32,12 @@ GitHub CI는 마크다운 형식과 내부 링크 검사 수행.
 
 ## 설정 정책
 
+- Docker 실행(`deploy/docker-compose.yml`): `llm`(llama.cpp CUDA, GPU)·`real-pa`(CPU, 127.0.0.1:18484)·선택 `nginx`(profile `tls`)
+  - `cd deploy && cp .env.example .env` 후 `MODELS_ROOT`·`CONFIG_DIR`·`PUBLIC_ORIGIN` 지정, `docker compose build`
+  - `docker compose run --rm configure`: 컨테이너 안에서 설정 생성(모델 경로 `/workspace/models`, LLM `http://llm:8080/v1`, `--llm-tools`)
+  - `docker compose up -d llm real-pa`, TLS는 `docker compose --profile tls up -d nginx`(`deploy/nginx-docker.conf`). 모든 서비스 `restart: unless-stopped`
+  - real-PA API는 접속 키가 없으므로 포트는 loopback에만 열고, 외부 접근은 TLS 프록시와 방화벽·VPN으로 제한
+- `prepare-local-config.py --llm-tools`: LLM manifest에 `tools` feature 선언(Lemmy 도구 라우팅 연결에 필요)
 - 모델 받기: `bash scripts/download-models.sh [MODELS_ROOT]`(기본 `/workspace/models`). Qwen3-8B Q4_K_M·SenseVoice int8·Supertonic 3 int8·한국어 zipformer KWS·silero VAD를 SHA256 고정으로 받고, `--models-root`와 같은 배치로 둔다. `SKIP_LLM=1`은 음성 모델만
 - 로컬 LLM 선택: `prepare-local-config.py --llm-model <기존 GGUF 경로> --output-dir <새 설정 폴더>`, 상대 경로는 `--models-root` 기준·절대 경로 허용
 - 서버 model alias는 `--llm-model-id <이름>`으로 지정, 생략 시 GGUF 파일명 사용. 선택 파일의 SHA256은 manifest에 기록

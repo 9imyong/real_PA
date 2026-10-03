@@ -33,7 +33,8 @@ GitHub CI는 마크다운 형식과 내부 링크 검사 수행.
 ## 설정 정책
 
 - Docker 실행(`deploy/docker-compose.yml`): `llm`(llama.cpp CUDA, GPU)·`real-pa`(CPU, 127.0.0.1:18484)·선택 `nginx`(profile `tls`)
-  - `cd deploy && cp .env.example .env` 후 `MODELS_ROOT`·`CONFIG_DIR`·`PUBLIC_ORIGIN` 지정, `docker compose build`
+  - `cd deploy && cp .env.example .env` 후 `MODELS_ROOT`·`CONFIG_DIR`·`PUBLIC_ORIGIN`·`HOST_UID`/`HOST_GID`(`id -u`/`id -g`) 지정, `docker compose build`
+  - `configure`·`real-pa`는 `HOST_UID:HOST_GID`로 실행해 호스트 소유 설정·모델 폴더를 권한 변경 없이 쓴다
   - `docker compose run --rm configure`: 컨테이너 안에서 설정 생성(모델 경로 `/workspace/models`, LLM `http://llm:8080/v1`, `--llm-tools`)
   - `docker compose up -d llm real-pa`, TLS는 `docker compose --profile tls up -d nginx`(`deploy/nginx-docker.conf`). 모든 서비스 `restart: unless-stopped`
   - real-PA API는 접속 키가 없으므로 포트는 loopback에만 열고, 외부 접근은 TLS 프록시와 방화벽·VPN으로 제한

@@ -34,6 +34,8 @@ services:
     image: real-pa:local
     restart: unless-stopped
     depends_on: [llm]
+    # Same owner as the mounted models/config, whatever the host umask.
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
     volumes:
       - *models
       - {type: bind, source: "${CONFIG_DIR:-/workspace/real-pa}", target: /workspace/real-pa, read_only: true}
@@ -47,6 +49,8 @@ services:
   configure:
     image: real-pa:local
     profiles: [tools]
+    # Writes into the host CONFIG_DIR, so run as its owner (the image user cannot).
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
     volumes:
       - *models
       - {type: bind, source: "${CONFIG_DIR:-/workspace/real-pa}", target: /workspace/real-pa}

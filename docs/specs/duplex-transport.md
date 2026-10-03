@@ -50,6 +50,8 @@
 - chat_http 설정 system_prompt와 함께 쓰면 운영자 지침 뒤에 연결 지침을 이어 하나의 system 메시지로 전송
 - 운영자 지침은 정체성 없는 규칙 한정, 이름·말투·페르소나는 연결 지침(클라이언트) 소유
 - Lemmy는 서버에서 조합한 레미 지침만 전달, 브라우저 start의 system_prompt는 upstream 미전달
+- history: 선택, `{role: user|assistant, content}` 최대 40개·content 공백 아닌 4000자 이하. 연결 세션의 초기 대화 기록으로 사용(지침 뒤, 새 발화 앞)
+- 대화 기록 저장은 클라이언트 책임(Lemmy는 레미 DB 세션에 저장). real-PA는 연결 메모리에만 두고 디스크에 남기지 않음
 - 이후 단일 메시지: 최대 65536byte/자, 입력 큐 초과 시 세션 실패
 - 브라우저: 시작 gesture/마이크 권한·echoCancellation 활성 설정 필요
 - 테스트 콘솔의 출력 AudioContext는 48kHz, generic client는 outputSampleRate 미지정 시 장치 기본 rate 사용

@@ -14,10 +14,22 @@ from .speech_controls import utterance_control
 
 
 MAX_SYSTEM_PROMPT = 8000
+MAX_HISTORY_MESSAGES = 40
+MAX_HISTORY_TEXT = 4000
+
+
+def validate_history(history):
+    """Client-owned prior turns (the client stores dialogue; real-PA stays stateless)."""
+    if (not isinstance(history, list) or len(history) > MAX_HISTORY_MESSAGES
+            or not all(isinstance(m, dict) and m.get('role') in {'user', 'assistant'} and set(m) == {'role', 'content'}
+                       and isinstance(m['content'], str) and m['content'].strip()
+                       and len(m['content']) <= MAX_HISTORY_TEXT for m in history)):
+        raise ValueError('invalid history')
+    return [{'role': m['role'], 'content': m['content']} for m in history]
 
 
 async def run_connection(ws, providers, session_id, *, ui_started=False, authorize=None,
-                         idle_timeout=None, system_prompt=None, client_tools=None):
+                         idle_timeout=None, system_prompt=None, client_tools=None, history=None):
     """Run an already authenticated connection with a server-owned session ID.
 
     ``authorize`` must revalidate the original user/binding, never a client field.
@@ -26,6 +38,7 @@ async def run_connection(ws, providers, session_id, *, ui_started=False, authori
     """
     session = DialogueSession(session_id, providers['llm'], providers['tts'], timeout=60,
                               system_prompt=system_prompt, client_tools=client_tools)
+    session.history = list(history or [])
     runtime = RobotRuntime(session, providers)
     tasks = []
     if idle_timeout is not None and (not math.isfinite(idle_timeout) or idle_timeout <= 0):
@@ -167,6 +180,7 @@ class RobotGateway:
             if system_prompt is not None and (not isinstance(system_prompt, str) or not system_prompt.strip()
                                               or len(system_prompt) > MAX_SYSTEM_PROMPT):
                 raise ValueError('invalid system prompt')
+            history = validate_history(hello['history']) if 'history' in hello else None
             client_tools = None
             if hello.get('route', False) is not False or 'tools' in hello:
                 if hello.get('route') is not True or 'tools' not in self.providers['llm'].capabilities.features:
@@ -187,4 +201,4 @@ class RobotGateway:
             return
         await run_connection(ws, self.providers, str(uuid.uuid4()),
                              ui_started=hello.get('ui_started', False), idle_timeout=self.idle_timeout,
-                             system_prompt=system_prompt, client_tools=client_tools)
+                             system_prompt=system_prompt, client_tools=client_tools, history=history)

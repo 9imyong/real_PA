@@ -135,6 +135,42 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
                 await RobotGateway(self.providers(), None, anonymous=True).handle(socket)
                 self.assertEqual(socket.closed, 1008)
 
+    async def test_client_history_seeds_the_session_after_the_system_prompt(self):
+        providers = self.providers()
+        seen = []
+        stream = providers['llm'].stream
+        def record(request, context):
+            seen.append(request.data['messages'])
+            return stream(request, context)
+        providers['llm'].stream = record
+        providers['llm'].gate.set()
+        socket = Socket()
+        history = [{'role': 'user', 'content': '내 이름은 준이야'}, {'role': 'assistant', 'content': '반가워요, 준님.'}]
+        socket.input.put_nowait(json.dumps({'type': 'start', 'ui_started': True, 'system_prompt': '지침',
+                                            'history': history}))
+        task = asyncio.create_task(RobotGateway(providers, None, anonymous=True).handle(socket))
+        try:
+            await socket.wait_type('session_started')
+            socket.input.put_nowait(json.dumps({'type': 'text', 'text': '내 이름 뭐야?', 'output_audio': False}))
+            await socket.wait_type('turn_done')
+            (messages,) = seen
+            self.assertEqual(messages, [{'role': 'system', 'content': '지침'}, *history,
+                                        {'role': 'user', 'content': '내 이름 뭐야?'}])
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    async def test_start_rejects_invalid_history(self):
+        bad = [{'role': 'system', 'content': 'x'}], [{'role': 'user', 'content': ''}], [{'role': 'user'}], \
+              [{'role': 'user', 'content': 'x', 'extra': 1}], [{'role': 'user', 'content': 'x' * 4001}], \
+              [{'role': 'user', 'content': 'x'}] * 41, 'not a list'
+        for history in bad:
+            with self.subTest(history=str(history)[:40]):
+                socket = Socket()
+                socket.input.put_nowait(json.dumps({'type': 'start', 'history': history}))
+                await RobotGateway(self.providers(), None, anonymous=True).handle(socket)
+                self.assertEqual(socket.closed, 1008)
+
     async def test_development_start_rejects_non_object_and_invalid_mode(self):
         for hello in [[], {'type': 'start', 'token': 'a' * 16, 'ui_started': 'false'}]:
             with self.subTest(hello=hello):

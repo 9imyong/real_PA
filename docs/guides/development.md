@@ -32,6 +32,7 @@ GitHub CI는 마크다운 형식과 내부 링크 검사 수행.
 
 ## 설정 정책
 
+- 모델 받기: `bash scripts/download-models.sh [MODELS_ROOT]`(기본 `/workspace/models`). Qwen3-8B Q4_K_M·SenseVoice int8·Supertonic 3 int8·한국어 zipformer KWS·silero VAD를 SHA256 고정으로 받고, `--models-root`와 같은 배치로 둔다. `SKIP_LLM=1`은 음성 모델만
 - 로컬 LLM 선택: `prepare-local-config.py --llm-model <기존 GGUF 경로> --output-dir <새 설정 폴더>`, 상대 경로는 `--models-root` 기준·절대 경로 허용
 - 서버 model alias는 `--llm-model-id <이름>`으로 지정, 생략 시 GGUF 파일명 사용. 선택 파일의 SHA256은 manifest에 기록
 - 생성 설정의 출력 한도 기본 512 token, `--llm-max-tokens`로 조정. 기본 system prompt 없음, `--llm-system-prompt`는 정체성 없는 운영 규칙에만 사용
